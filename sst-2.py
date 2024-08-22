@@ -1,3 +1,4 @@
+import types
 from datasets import load_dataset
 import torch
 import nlpaug.augmenter.word as naw
@@ -7,7 +8,8 @@ from opacus.validators import ModuleValidator
 from opacus import PrivacyEngine
 
 from train import train
-from data import AbstractMultiViewTextDataset, prepare_eval_dataloaders
+from data import MultiViewTextDataset, prepare_eval_dataloaders
+from privacy_engine_util import _prepare_model_modified
 
 
 MODEL_NAME = "bert-base-uncased"
@@ -31,7 +33,7 @@ def main():
 
     # Use only a subset of the training dataset for testing
     subset_train_dataset = pre_dataset["train"].select(range(20))
-    mv_train_loader = AbstractMultiViewTextDataset(subset_train_dataset, tokenizer, transform_list=transform_list).__dataloader__(BATCH_SIZE)
+    mv_train_loader = MultiViewTextDataset(subset_train_dataset, tokenizer, transform_list=transform_list).__dataloader__(BATCH_SIZE)
     #valid_loader, test_loader = prepare_eval_dataloaders(pre_dataset, tokenizer, EVAL_BATCH_SIZE=64)
 
     # Model configuration
@@ -60,12 +62,16 @@ def main():
     optimizer = optim.SGD(model.parameters(), lr=LR)
 
     privacy_engine = PrivacyEngine()
+    # A Hack to load the custom AugmultGradSamplerModule. Methods almost identical, 
+    privacy_engine._prepare_model = types.MethodType(_prepare_model_modified, privacy_engine)
+
     dp_model, dp_optimizer, dp_train_loader = privacy_engine.make_private(
         module=model,
         optimizer=optimizer,
         data_loader=mv_train_loader,
         noise_multiplier=1.0,
-        max_grad_norm=1.0
+        max_grad_norm=1.0,
+        grad_sample_mode="augmult",
     )
 
     train_inputs = {
