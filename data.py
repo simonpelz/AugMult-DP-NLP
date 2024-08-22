@@ -30,15 +30,17 @@ def prepare_eval_dataloaders(pre_dataset,tokenizer, EVAL_BATCH_SIZE=64):
 
 # TODO create check that len(transform_list) == K
 # TODO is non augmented sample in K or K+1?
-class AbstractMultiViewTextDataset(torch.utils.data.Dataset):
+class MultiViewTextDataset(torch.utils.data.Dataset):
     """
     Extends the Pytorch Dataset Class to Augment text samples during Runtime and stacks them per Sample.
     """
     def __init__(self, pre_dataset, tokenizer, transform_list=None, max_length=128):
         self.pre_dataset = pre_dataset
         self.tokenizer = tokenizer
-        self.transform_list = transform_list if transform_list else []
+        self.transform_list = transform_list if transform_list else [lambda x: x]
         self.max_length = max_length
+        self.key_to_text = 'sentence'
+        self.key_to_labels = 'label'
 
     def __len__(self):
         # TODO what exactly is its len? k*len or len
@@ -66,8 +68,8 @@ class AbstractMultiViewTextDataset(torch.utils.data.Dataset):
         return stacked_views
 
     def __getitem__(self, index):
-        text = self.pre_dataset[index]['sentence']
-        label = self.pre_dataset[index]['label']
+        text = self.pre_dataset[index][self.key_to_text]
+        label = self.pre_dataset[index][self.key_to_labels]
         
         stacked_views = self.__augment_tokenize_stack(text)
         stacked_views['labels'] = label

@@ -1,7 +1,7 @@
 from datasets import load_dataset
 import torch
 import nlpaug.augmenter.word as naw
-from data import AbstractMultiViewTextDataset
+from data import MultiViewTextDataset
 from transformers import AutoTokenizer, AutoConfig, AutoModelForSequenceClassification
 from torch.utils.data import DataLoader
 import torch.optim as optim
@@ -31,7 +31,7 @@ def main():
 
     # Use only a subset of the training dataset for testing
     subset_train_dataset = pre_dataset["train"].select(range(20))
-    mv_train_loader = AbstractMultiViewTextDataset(subset_train_dataset, tokenizer, transform_list=transform_list).__dataloader__(BATCH_SIZE)
+    mv_train_loader = MultiViewTextDataset(subset_train_dataset, tokenizer, transform_list=transform_list).__dataloader__(BATCH_SIZE)
 
     # Model configuration
     config = AutoConfig.from_pretrained(MODEL_NAME)
