@@ -1,7 +1,6 @@
 import types
 from datasets import load_dataset
 import torch
-import nlpaug.augmenter.word as naw
 from transformers import AutoTokenizer, AutoConfig, AutoModelForSequenceClassification
 import torch.optim as optim
 from opacus.validators import ModuleValidator
@@ -10,56 +9,61 @@ from opacus import PrivacyEngine
 from train import train
 from data import MultiViewTextDataset, prepare_eval_dataloaders
 from privacy_engine_util import _prepare_model_modified
+from augmentations import Augmentations
 
-
+# Model Information
 MODEL_NAME = "bert-base-uncased"
+NUM_LABELS = 2
+
+# Training 
 EPOCHS = 2
 BATCH_SIZE = 4
 LR = 5e-4
 
+# Differential privacy parameters
+EPSILON = 8.0
+DELTA = 1 / 67349 # len(train_loader) #unaugmented samples
+MAX_GRAD_NORM = 1.0
+
+
+def model_and_tokenizer(model_name, num_labels):
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    config = AutoConfig.from_pretrained(MODEL_NAME)
+    config.num_labels = NUM_LABELS
+    model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, config=config)
+    return model, tokenizer
+
+
 def main():
     
-    # Augmentations
-    synonym_repl = naw.SynonymAug(aug_src='wordnet').augment
-    context_insert = naw.ContextualWordEmbsAug(model_path='bert-base-uncased', action="insert").augment
-    context_repl = naw.ContextualWordEmbsAug(model_path='bert-base-uncased', action="substitute").augment
-    unaugmented = lambda x: x
+    # ----------- Initialisation -------------
 
-    transform_list = [unaugmented, synonym_repl,context_insert,context_repl]
+    # Model
+    model, tokenizer = model_and_tokenizer(MODEL_NAME, NUM_LABELS)
+    # Optimizer
+    optimizer = optim.SGD(model.parameters(), lr=LR)
 
-    # Load and preprocess the dataset
+    # Augmentation types
+    transform_list = Augmentations().test_augs()
+    # Dataloaders
     pre_dataset = load_dataset("glue", "sst2")
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-
-    # Use only a subset of the training dataset for testing
+    #TODO remove: Use only a subset of the training dataset for testing
     subset_train_dataset = pre_dataset["train"].select(range(20))
     mv_train_loader = MultiViewTextDataset(subset_train_dataset, tokenizer, transform_list=transform_list).__dataloader__(BATCH_SIZE)
     #valid_loader, test_loader = prepare_eval_dataloaders(pre_dataset, tokenizer, EVAL_BATCH_SIZE=64)
 
-    # Model configuration
-    config = AutoConfig.from_pretrained(MODEL_NAME)
-    num_labels = pre_dataset["train"].features["label"].num_classes
-    config.num_labels = num_labels
-    print(f"Number of labels: {num_labels}")
-    model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, config=config)
-    model.train()
-
-    # Ensure DP compatibility
-    if not ModuleValidator.is_valid(model):
-        model = ModuleValidator.fix(model)
-
-    # GPU handling
+     # GPU handling
     device_name = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device_name)
-    print(device_name)
     model.to(device)
+    print(device_name)
 
-    # Differential privacy parameters
-    EPSILON = 8.0
-    DELTA = 1 / len(mv_train_loader)
-    MAX_GRAD_NORM = 1.0
+    # ---------------- Make DP --------------------
 
-    optimizer = optim.SGD(model.parameters(), lr=LR)
+    # Ensure DP compatibility
+    model.train()
+    if not ModuleValidator.is_valid(model):
+        model = ModuleValidator.fix(model)
 
     privacy_engine = PrivacyEngine()
     # A Hack to load the custom AugmultGradSamplerModule. Methods almost identical, 
@@ -74,6 +78,12 @@ def main():
         grad_sample_mode="augmult",
     )
 
+    # Custom Grad Samplers
+    # TODO is this handled by make_private? or implement
+
+
+    # -------------- Training ----------------------
+    
     train_inputs = {
         'dp_model': dp_model,
         'dp_train_loader': dp_train_loader,
@@ -82,7 +92,13 @@ def main():
         'K': len(transform_list),
         }
     
-    train(**train_inputs)
+    for _ in range(EPOCHS):
+        train(**train_inputs)
+
+    # TODO add validation
+    # TODO add logging
+    # TODO add save ckpt
+
 
 if __name__ == "__main__":
     main()

@@ -18,8 +18,9 @@ def train(
     # Reshape (N, K, max_len) to (N*K, max_len)
     reshape_flatten = lambda x: x.view(-1, x.size(-1))  
 
+    augmentation_max_physical_batchsize = MAX_PHYSICAL_BATCH_SIZE // K
     # Using BatchMemoryManager for large batches
-    with BatchMemoryManager(data_loader=dp_train_loader, max_physical_batch_size=MAX_PHYSICAL_BATCH_SIZE, optimizer=dp_optimizer) as memory_safe_data_loader: 
+    with BatchMemoryManager(data_loader=dp_train_loader, max_physical_batch_size=augmentation_max_physical_batchsize, optimizer=dp_optimizer) as memory_safe_data_loader: 
         for step, batch in enumerate(memory_safe_data_loader):
             print(f"\n NEW BATCH" + "=" * 100 + "\n")
             print(f"MultiView Sentence (tokens) shape: {batch['input_ids'].shape}\nshould be: [B, K, max_len=128]")
