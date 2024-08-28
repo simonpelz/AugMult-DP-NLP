@@ -20,6 +20,7 @@ import warnings
 from functools import partial
 from typing import Iterable, List, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 from opacus.grad_sample.functorch import ft_compute_per_sample_gradient, prepare_layer
@@ -145,7 +146,8 @@ class GradSampleModuleAugMult(AbstractGradSampleModule):
             batch_first=batch_first,
             force_functorch=force_functorch,
         )
-        print("#"*20+"USING AUGMULT GRADSAMPLER"+"#"*20) #TODO remove print statement
+        self.K = 1 # TODO Integrate K better
+
 
     def forward(self, *args, **kwargs):
         return self._module(*args, **kwargs)
@@ -153,14 +155,6 @@ class GradSampleModuleAugMult(AbstractGradSampleModule):
     def iterate_submodules(self, module: nn.Module) -> Iterable[nn.Module]:
         if has_trainable_params(module):
             yield module
-
-        # Don't recurse if module is handled by functorch
-        if (
-            has_trainable_params(module)
-            and type(module) not in self.GRAD_SAMPLERS
-            and type(module) not in [DPRNN, DPLSTM, DPGRU]
-        ):
-            return
 
         for m in module.children():
             yield from self.iterate_submodules(m)
@@ -324,7 +318,7 @@ class GradSampleModuleAugMult(AbstractGradSampleModule):
         """
         if not self.hooks_enabled:
             return
-
+        
         backprops = forward_output[0].detach()
         activations, backprops = self.rearrange_grad_samples(
             module=module,
@@ -335,8 +329,8 @@ class GradSampleModuleAugMult(AbstractGradSampleModule):
         if not self.force_functorch and type(module) in self.GRAD_SAMPLERS:
             grad_sampler_fn = self.GRAD_SAMPLERS[type(module)]
         else:
-            grad_sampler_fn = ft_compute_per_sample_gradient
-
+            raise NotImplementedError
+        
         grad_samples = grad_sampler_fn(module, activations, backprops)
         for param, gs in grad_samples.items():
             create_or_accumulate_grad_sample(
@@ -395,8 +389,9 @@ class GradSampleModuleAugMult(AbstractGradSampleModule):
             module.max_batch_len = _get_batch_size(
                 module=module,
                 batch_dim=batch_dim,
-            )
-        activations = module.activations.pop()
+            ) // self.K # TODO K is used here
+        #print(f"act:{np.shape([m.numpy() for m in module.activations])}")
+        activations = module.activations.pop()[0] #TODO is this correct? IMPORTANT!!
 
         n = module.max_batch_len
         if loss_reduction == "mean":
