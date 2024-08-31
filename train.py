@@ -1,9 +1,7 @@
-import json
-import time
-import torch.nn as nn
 import torch
 import numpy as np
 from opacus.utils.batch_memory_manager import BatchMemoryManager
+from logging_util import track_time, log_metrics
 
 
 def train(
@@ -18,6 +16,8 @@ def train(
 ):
     
     logging_interval = len(dp_train_loader) // logs_per_epoch
+    if logging_interval==0: logging_interval=1
+
     
     to_mean_accuracies = []
     to_mean_losses = []
@@ -30,7 +30,7 @@ def train(
 
     # Time Logging
     data_loading_times, forward_times, backward_times, optimizer_times = [], [], [], []
-    optimizer_time = time.time()
+    start_time = track_time()
     step = 0
     # Using BatchMemoryManager for large batches
     with BatchMemoryManager(data_loader=dp_train_loader, max_physical_batch_size=augmentation_max_physical_batchsize, optimizer=dp_optimizer) as memory_safe_data_loader: 
@@ -46,9 +46,7 @@ def train(
                 else: 
                     batch[column] = reshape_flatten(batch[column])
         
-            start = time.time()
-            data_loading_times.append(start-optimizer_time)
-
+            start_time = track_time(data_loading_times,start_time)
 
             # Forward pass
             batch = {k: v.to(device) for k, v in batch.items()}
@@ -59,18 +57,16 @@ def train(
             labels = batch['labels'].detach().cpu().numpy()
             acc = (preds==labels).mean()
 
-            forward_time = time.time()
-            forward_times.append(forward_time -start)
+            start_time = track_time(forward_times,start_time)
             
             # Backward pass
             loss.backward()
-            backward_time = time.time()
-            backward_times.append(backward_time -forward_time)
+            start_time = track_time(backward_times,start_time)
 
             # Optimization
             dp_optimizer.step()
-            optimizer_time = time.time()
-            optimizer_times.append(optimizer_time-backward_time)
+            start_time = track_time(optimizer_times,start_time)
+
 
             # Logging loss and acc
             is_updated = not (dp_optimizer._check_skip_next_step(pop_next=False))  # check if we are at the end of a true batch without incrementing the count.
@@ -80,17 +76,24 @@ def train(
                 to_mean_accuracies.append(acc)
                 to_mean_losses.append(loss.item())
                 if step % logging_interval == 0:
-                    l,a = np.mean(to_mean_losses),np.mean(to_mean_accuracies)
-                    print(f"Step {step}, Loss: {l:.3f}, Accuracy: {a:.3f}")
-                    logger.info(f"Step {step}, Loss: {l:.3f}, Accuracy: {a:.3f}  |   " + json.dumps({"optimizer_time":np.mean(optimizer_times),
-                                        "forward_time":np.mean(forward_times),
-                                        "backward_time":np.mean(backward_times),
-                                        "data_loading_time":np.mean(data_loading_times),}))
-                    optimizer_times,forward_times, backward_times, data_loading_times = [],[],[],[]
-                    to_mean_accuracies,to_mean_losses = [],[]
+                    l, a = np.mean(to_mean_losses), np.mean(to_mean_accuracies)
+                    metrics = {
+                        "train_loss": l,
+                        "train_accuracy": a,
+                        "optimizer_time": np.mean(optimizer_times),
+                        "forward_time": np.mean(forward_times),
+                        "backward_time": np.mean(backward_times),
+                        "data_loading_time": np.mean(data_loading_times),
+                    }
+                    log_metrics(step, metrics, logger)
+                    
+                    # Reset the timers and accumulators
+                    optimizer_times, forward_times, backward_times, data_loading_times = [], [], [], []
+                    to_mean_accuracies, to_mean_losses = [], []
 
 
-def eval(model, eval_loader,device,logger=None):
+
+def eval(model, eval_loader,device):
     """
     Test the model on the testing set and the training set
     """
@@ -114,8 +117,8 @@ def eval(model, eval_loader,device,logger=None):
 
     test_top1_avg = np.mean(test_top1_acc)
     losses_avg  = np.mean(losses)
-    s = (f"\Eval set:"f"Loss: {np.mean(losses_avg):.6f} "f"Acc: {test_top1_avg * 100:.6f} ")
-    if logger: logger.info(s)
-    else: print(s)
+
+    model.train()
+
     return (test_top1_avg,losses_avg)
                 

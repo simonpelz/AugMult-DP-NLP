@@ -1,4 +1,7 @@
 import logging
+import time
+
+import wandb
 
 def get_file_logger(logger_name, log_file, level=logging.INFO):
     # Create a logger
@@ -21,7 +24,43 @@ def get_file_logger(logger_name, log_file, level=logging.INFO):
     
     return logger
 
+
 def log_from_dict(logger, d):
     for k,v in d.items():
         logger.info(f"{k}: {v}")
+
+
+def log_metrics(step, metrics, logger=None):
+    """
+    Logs the metrics to both the console and wandb.
+    
+    Args:
+    - step: The current step or epoch.
+    - metrics: A dictionary of metrics to log.
+    - logger: Optional logger to use for console logging.
+    """
+    
+    # Log to WandB
+    wandb.log(metrics, step=step)
+        
+    
+    # Log to console if logger is provide
+    log_str = f"Step {step}, " + ", ".join([f"{k}: {v:.4f}" for k, v in metrics.items()])
+
+    if logger:
+        logger.info(log_str)
+    else:
+        print(log_str)
+
+
+
+def track_time(time_list=None,start_time=None):
+    if time_list is not None:
+        if start_time is None:
+            pass
+        delta = time.time() - start_time
+        time_list.append(delta)
+    return time.time()
+
+
 

@@ -6,6 +6,12 @@ __pycache__/
 # C extensions
 *.so
 
+
+# Large files
+ckpts/
+# Analytics
+wandb/
+
 # Distribution / packaging
 .Python
 build/
