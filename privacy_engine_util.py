@@ -1,4 +1,6 @@
+from functools import partial
 from typing import Sequence, Type, Union, List
+import torch
 import torch.nn as nn
 
 from augmult_grad_sample_module import GradSampleModuleAugMult
@@ -67,9 +69,6 @@ def _prepare_model_modified(
     # `get_compatible_module()`
     self.validate(module=module, optimizer=None, data_loader=None)
 
-    #TODO print statement to logger?
-    print("PrivacyEngine is using _prepare_model extended for AugmentationMultiplicity")
-
     # wrap
     if isinstance(module, AbstractGradSampleModule):
         if (
@@ -101,3 +100,23 @@ def _prepare_model_modified(
                 batch_first=batch_first,
                 loss_reduction=loss_reduction,
             )
+        
+
+def collate_dict(batch,*,collate_fn,sample_empty_shapes,dtypes,):
+   
+    if len(batch) > 0:
+        return collate_fn(batch)
+    else:
+        return {key:
+            torch.zeros(sample_empty_shapes[key], dtype=dtypes[key])
+            for key in sample_empty_shapes
+        }
+
+
+def dict_wrap_collate_with_empty(*,collate_fn,sample_empty_shapes,dtypes,):
+    return partial(
+        collate_dict,
+        collate_fn=collate_fn,
+        sample_empty_shapes=sample_empty_shapes,
+        dtypes=dtypes,
+    )
