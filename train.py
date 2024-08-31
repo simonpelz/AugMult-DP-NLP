@@ -13,9 +13,11 @@ def train(
     device,
     K,
     logger,
-    max_phys_batch_size = 200,
-    logging_interval = 100,
+    max_phys_batch_size,
+    logs_per_epoch = 10,
 ):
+    
+    logging_interval = len(dp_train_loader) // logs_per_epoch
     
     to_mean_accuracies = []
     to_mean_losses = []
@@ -29,10 +31,10 @@ def train(
     # Time Logging
     data_loading_times, forward_times, backward_times, optimizer_times = [], [], [], []
     optimizer_time = time.time()
-    
+    step = 0
     # Using BatchMemoryManager for large batches
     with BatchMemoryManager(data_loader=dp_train_loader, max_physical_batch_size=augmentation_max_physical_batchsize, optimizer=dp_optimizer) as memory_safe_data_loader: 
-        for step, batch in enumerate(memory_safe_data_loader):
+        for batch in memory_safe_data_loader:
 
             dp_optimizer.zero_grad(set_to_none=True) 
 
@@ -71,15 +73,49 @@ def train(
             optimizer_times.append(optimizer_time-backward_time)
 
             # Logging loss and acc
-            to_mean_accuracies.append(acc)
-            to_mean_losses.append(loss.item())
-            if step % logging_interval == 0:
-                l,a = np.mean(to_mean_losses),np.mean(to_mean_accuracies)
-                print(f"Step {step}, Loss: {l}, Accuracy: {a}")
-                logger.info(f"Step {step}, Loss: {l}, Accuracy: {a}" + json.dumps({"optimizer_time":np.mean(optimizer_times),
-                                    "forward_time":np.mean(forward_times),
-                                    "backward_time":np.mean(backward_times),
-                                    "data_loading_time":np.mean(data_loading_times),}))
-                optimizer_times,forward_times, backward_times, data_loading_times = [],[],[],[]
-                to_mean_accuracies,to_mean_losses = [],[]
+            is_updated = not (dp_optimizer._check_skip_next_step(pop_next=False))  # check if we are at the end of a true batch without incrementing the count.
+            if is_updated: 
+                step += 1  
+
+                to_mean_accuracies.append(acc)
+                to_mean_losses.append(loss.item())
+                if step % logging_interval == 0:
+                    l,a = np.mean(to_mean_losses),np.mean(to_mean_accuracies)
+                    print(f"Step {step}, Loss: {l:.3f}, Accuracy: {a:.3f}")
+                    logger.info(f"Step {step}, Loss: {l:.3f}, Accuracy: {a:.3f}  |   " + json.dumps({"optimizer_time":np.mean(optimizer_times),
+                                        "forward_time":np.mean(forward_times),
+                                        "backward_time":np.mean(backward_times),
+                                        "data_loading_time":np.mean(data_loading_times),}))
+                    optimizer_times,forward_times, backward_times, data_loading_times = [],[],[],[]
+                    to_mean_accuracies,to_mean_losses = [],[]
+
+
+def eval(model, eval_loader,device,logger=None):
+    """
+    Test the model on the testing set and the training set
+    """
+    model.eval()
+    losses = []
+    test_top1_acc = []
+
+    with torch.no_grad():
+        for batch in eval_loader:
+
+            batch = {k: v.to(device) for k, v in batch.items()}
+            outputs = model(**batch)
+
+            loss = outputs.loss 
+            preds = np.argmax(outputs.logits.detach().cpu().numpy(), axis=1)
+            labels = batch['labels'].detach().cpu().numpy()
+            acc = (preds==labels).mean()
+
+            losses.append(loss.item())
+            test_top1_acc.append(acc)
+
+    test_top1_avg = np.mean(test_top1_acc)
+    losses_avg  = np.mean(losses)
+    s = (f"\Eval set:"f"Loss: {np.mean(losses_avg):.6f} "f"Acc: {test_top1_avg * 100:.6f} ")
+    if logger: logger.info(s)
+    else: print(s)
+    return (test_top1_avg,losses_avg)
                 

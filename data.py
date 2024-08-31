@@ -4,32 +4,14 @@ import numpy as np
 from torch.utils.data import DataLoader
 
 
-def prepare_eval_dataloaders(pre_dataset,tokenizer, EVAL_BATCH_SIZE=64):
-    """
-    initialize dataloaders for validation and test dataset
-
-    Returns:
-        validation_dataloader, test_dataloader
-    """
-    validation_dataset = pre_dataset["validation"]
-    tokens_validation_dataset = validation_dataset.map(
-        lambda example: tokenizer(example["sentence"], max_length=128, padding='max_length', truncation=True),
-        batched=True
-    )
-    test_dataset = pre_dataset["test"]
-    tokens_test_dataset = test_dataset.map(
-        lambda example: tokenizer(example["sentence"], max_length=128, padding='max_length', truncation=True),
-        batched=True
-    )
-
-    validation_dataloader = DataLoader(tokens_validation_dataset, shuffle=False, batch_size=EVAL_BATCH_SIZE)
-    test_dataloader = DataLoader(tokens_test_dataset, shuffle=False, batch_size=EVAL_BATCH_SIZE) 
-
-    return validation_dataloader, test_dataloader
+def non_dp_tokenize_Dataloader(dataset,tokenizer,batch_size):
+    tokens = dataset.map(lambda x: tokenizer(x['sentence'], max_length=128, padding='max_length', truncation=True), batched=True)
+    tokens = tokens.remove_columns(['idx','sentence']).rename_column("label", "labels") 
+    tokens.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+    dataloader = DataLoader(tokens, shuffle=False, batch_size=batch_size)
+    return dataloader
 
 
-# TODO create check that len(transform_list) == K
-# TODO is non augmented sample in K or K+1?
 class MultiViewTextDataset(torch.utils.data.Dataset):
     """
     Extends the Pytorch Dataset Class to Augment text samples during Runtime and stacks them per Sample.
@@ -43,7 +25,6 @@ class MultiViewTextDataset(torch.utils.data.Dataset):
         self.key_to_labels = 'label'
 
     def __len__(self):
-        # TODO what exactly is its len? k*len or len
         return len(self.pre_dataset)
     
     def __tokenize(self, text):

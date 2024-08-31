@@ -45,17 +45,8 @@ def non_dp_sst2(epochs,batch_size,lr,logger,dataset_size=None,only_classifier=Tr
     # Tokenization of the datasets
     if dataset_size is not None: modified_trainset = dataset['train'].select(range(dataset_size))
     else: modified_trainset = dataset['train']
-    tokens_train = modified_trainset.map(lambda x: tokenizer(x['sentence'], max_length=128, padding='max_length', truncation=True), batched=True)
-    tokens_valid = dataset['validation'].map(lambda x: tokenizer(x['sentence'], max_length=128, padding='max_length', truncation=True), batched=True)
-    tokens_train = tokens_train.remove_columns(['idx','sentence']).rename_column("label", "labels") 
-    tokens_valid = tokens_valid.remove_columns(['idx','sentence']).rename_column("label", "labels") 
-    # Set the format to PyTorch tensors
-    tokens_train.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
-    tokens_valid.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
-
-    valid_loader = DataLoader(tokens_valid, shuffle=False, batch_size=batch_size)
-    train_loader = DataLoader(tokens_train, shuffle=False, batch_size=batch_size)
-
+    train_loader = non_dp_tokenize_Dataloader(modified_trainset,tokenizer,batch_size)
+    valid_loader = non_dp_tokenize_Dataloader(dataset['validation'],tokenizer,batch_size)
     # GPU handling
     device_name = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device_name)
@@ -216,7 +207,7 @@ def model_and_tokenizer(model_name, num_labels, only_classifier=True):
 def main():
     logger = get_file_logger("Non DP only classifier head", "non_dp.log")
     params = {
-    'epochs': 10,
+    'epochs': 1,
     'lr': 0.01,
     'batch_size': 256,
     'logger': logger,
