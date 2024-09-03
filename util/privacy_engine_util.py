@@ -3,7 +3,8 @@ from typing import Sequence, Type, Union, List
 import torch
 import torch.nn as nn
 
-from augmult_grad_sample_module import GradSampleModuleAugMult
+from augmult.augmult_grad_sample_module import GradSampleModuleAugMult
+from augmult.augmult_bias_grad_sample_module import GradSampleModuleAugMultBias
 
 from opacus.grad_sample.grad_sample_module import GradSampleModule
 from opacus.grad_sample.grad_sample_module_fast_gradient_clipping import (
@@ -40,6 +41,8 @@ def modified_get_gsm_class(grad_sample_mode: str) -> Type[AbstractGradSampleModu
         return GradSampleModuleNoOp
     elif grad_sample_mode == "augmult":
         return GradSampleModuleAugMult
+    elif grad_sample_mode == "bias_only":
+        return GradSampleModuleAugMultBias
     else:
         raise ValueError(
             f"Unexpected grad_sample_mode: {grad_sample_mode}. "

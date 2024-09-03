@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 from opacus.utils.batch_memory_manager import BatchMemoryManager
-from logging_util import track_time, log_metrics
+from util.logging_util import track_time, log_metrics
 
 
 def train(

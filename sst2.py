@@ -7,7 +7,6 @@ import torch.optim as optim
 import torch.nn as nn
 from torch.utils.data._utils.collate import default_collate
 
-from transformers import AutoTokenizer, AutoConfig, AutoModelForSequenceClassification
 from datasets import load_dataset
 
 from opacus.validators import ModuleValidator
@@ -15,10 +14,11 @@ from opacus import PrivacyEngine
 from opacus.data_loader import shape_safe, dtype_safe
 
 from train import train, eval
-from data import MultiViewTextDataset, non_dp_tokenize_Dataloader
-from privacy_engine_util import _prepare_model_modified, dict_wrap_collate_with_empty
-from augmented_grad_samplers import AugmentationMultiplicity
-from logging_util import log_from_dict
+from augmult.data import MultiViewTextDataset, non_dp_tokenize_Dataloader
+from util.privacy_engine_util import _prepare_model_modified, dict_wrap_collate_with_empty
+from augmult.augmented_grad_samplers import AugmentationMultiplicity
+from util.logging_util import log_from_dict
+from util.different_finetune_modes import model_and_tokenizer
 
 import wandb
 
@@ -38,35 +38,15 @@ LOGS_PER_EPOCH = 10
 MAX_PHYSICAL_BATCH_SIZE = 512
 
 
-def model_and_tokenizer(model_name, num_labels, only_classifier=False):
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    config = AutoConfig.from_pretrained(model_name)
-    config.num_labels = num_labels
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, config=config)
-
-    trainable_layers = [model.classifier] if only_classifier else [model.bert.encoder.layer[-1], model.bert.pooler, model.classifier]
-    total_params = 0
-    trainable_params = 0
-
-    for p in model.parameters():
-        p.requires_grad = False
-        total_params += p.numel()
-
-    for layer in trainable_layers:
-        for p in layer.parameters():
-            p.requires_grad = True
-            trainable_params += p.numel()
-
-    print(f"total params: {total_params}, trainable:{trainable_params}")
-    return model, tokenizer
-
-
-def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier, logger, dataset_size=None, only_classifier=False, save_model=None):    
+def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier, logger, trainable_param_setter, dataset_size=None, save_model=None, experiment_name = "untitled"):    
 
     # ----------- Initialisation -------------
 
     # Model, Optimizer, Tokenizer
-    model, tokenizer = model_and_tokenizer(MODEL_NAME, NUM_LABELS, only_classifier=only_classifier)
+    model, tokenizer = model_and_tokenizer(MODEL_NAME, NUM_LABELS)
+    total_p, trainable_p = trainable_param_setter(model)
+    logger.info(f"total params: {total_p}, trainable:{trainable_p}")
+
     optimizer = optim.SGD(model.parameters(), lr=lr)
 
     if not os.environ["TOKENIZERS_PARALLELISM"]:
@@ -77,13 +57,14 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
 
     # Dataloaders
     dataset = load_dataset("glue", "sst2")
+
     if dataset_size is not None:
         modified_trainset = dataset['train'].select(range(dataset_size))
     else:
         modified_trainset = dataset['train']
-
     mv_train_set = MultiViewTextDataset(modified_trainset, tokenizer, transform_list=transform_list)
     mv_train_loader = mv_train_set.__dataloader__(batch_size)
+
     valid_loader = non_dp_tokenize_Dataloader(dataset['validation'], tokenizer, batch_size * K)
 
     # GPU handling
@@ -93,7 +74,7 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
 
     # ------------- Logging ----------------------
     
-    wandb.init(project="sst2")
+    wandb.init(project=experiment_name)
 
     # Log hyperparameters
     hyperparams = {
@@ -130,7 +111,7 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
         data_loader=mv_train_loader,
         noise_multiplier=noise_multiplier,
         max_grad_norm=max_grad_norm,
-        grad_sample_mode="augmult",
+        grad_sample_mode="bias_only",
     )
 
     # Override the empty batch shapes provided by privacy engine
@@ -163,7 +144,7 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
         train(**train_inputs)
 
         valid_acc, valid_loss = eval(dp_model, valid_loader, device=device)
-        logger.info(f"Valifation: acc:{valid_acc}, loss:{valid_loss}")
+        logger.info(f"Validation: acc:{valid_acc}, loss:{valid_loss}")
 
         wandb.log({
             "epoch": i+1,
@@ -173,7 +154,7 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
 
 
     # ------------ Evaluation ---------------------
-    delta = 1 / dataset_size
+    delta = 1 / (dataset_size if dataset_size is not None else len(dataset['train']))
     real_eps = privacy_engine.accountant.get_epsilon(delta)
     logger.info(f"accountant epsilon: {real_eps}")
     wandb.log({"epsilon": real_eps,
@@ -184,9 +165,10 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
             'acc': valid_acc,
             'model_state_dict': dp_model.state_dict(),
         }, f"./ckpts/{save_model}")
-        logger.info(f"saved to:./ckpts/{save_model}")
+        logger.info(f"saved to:./logs_and_ckpts/ckpts/{save_model}")
 
     logger.info("=" * 50)
     wandb.finish()
 
+    # TODO Multi-GPU
     # TODO slurm?

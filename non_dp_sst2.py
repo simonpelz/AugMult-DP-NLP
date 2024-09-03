@@ -2,19 +2,18 @@ import logging
 
 import torch
 import torch.optim as optim
-from torch.utils.data import DataLoader
 import json
 import time
 import torch
 import numpy as np
 
-from transformers import AutoTokenizer, AutoConfig, AutoModelForSequenceClassification
 from datasets import load_dataset
 
 from train import train, eval
-from data import non_dp_tokenize_Dataloader
-from logging_util import log_from_dict
-from logging_util import get_file_logger
+from augmult.data import non_dp_tokenize_Dataloader
+from util.logging_util import log_from_dict
+from util.logging_util import get_file_logger
+from util.different_finetune_modes import model_and_tokenizer
 
 import os
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -30,12 +29,15 @@ NUM_LABELS = 2
 LOGS_PER_EPOCH = 10
 
 
-def non_dp_sst2(epochs,batch_size,lr,logger,dataset_size=None,only_classifier=True, save_model=None):
+def non_dp_sst2(epochs,batch_size,lr,logger,trainable_param_setter,dataset_size=None, save_model=None):
     
     # ----------- Initialisation -------------
 
     # Model, Optimizer, Tokenizer
-    model, tokenizer = model_and_tokenizer(MODEL_NAME, NUM_LABELS,only_classifier=only_classifier)
+    model, tokenizer = model_and_tokenizer(MODEL_NAME, NUM_LABELS)
+    total_p, trainable_p = trainable_param_setter(model)
+    logger.info(f"total params: {total_p}, trainable:{trainable_p}")
+
     optimizer = optim.SGD(model.parameters(), lr=lr)
 
     if not os.environ["TOKENIZERS_PARALLELISM"]: logger.info(f"Tokenizer paralellism turned off")
@@ -181,38 +183,15 @@ def eval(model, eval_loader,device,logger=None):
     return (test_top1_avg,losses_avg)
                 
 
-def model_and_tokenizer(model_name, num_labels, only_classifier=True):
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    config = AutoConfig.from_pretrained(model_name)
-    config.num_labels = num_labels
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, config=config)
-    
-    trainable_layers = [model.classifier] if only_classifier else [model.bert.encoder.layer[-1], model.bert.pooler, model.classifier]
-    total_params = 0
-    trainable_params = 0
-
-    for p in model.parameters():
-            p.requires_grad = False
-            total_params += p.numel()
-
-    for layer in trainable_layers:
-        for p in layer.parameters():
-            p.requires_grad = True
-            trainable_params += p.numel()
-    
-    print(f"total params: {total_params}, trainable:{trainable_params}")
-    return model, tokenizer
-
-
 def main():
-    logger = get_file_logger("Non DP only classifier head", "non_dp.log")
+    logger = get_file_logger("Non DP biases and classifier head", "non_dp.log")
     params = {
-    'epochs': 1,
+    'epochs': 10,
     'lr': 0.01,
     'batch_size': 256,
     'logger': logger,
     'only_classifier': False,
-    'save_model': "full_3layers.ckpt"
+    'save_model': "bias classifier nondp.ckpt"
     }
 
     s = f"Non DP - 10 Epochs - datasetsize = full - {params['batch_size']} Batchsize - LR = {params['lr']}, only classifier = {params['only_classifier']}"

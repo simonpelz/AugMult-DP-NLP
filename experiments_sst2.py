@@ -1,65 +1,94 @@
-from augmentations import Augmentations
-from logging_util import get_file_logger
+import json
+import torch
+from augmult.augmentations import Augmentations
+from util.logging_util import get_file_logger
 from sst2 import sst2
+from util.different_finetune_modes import *
 
-def exp_1():
+def safe_sst2(logger,**kwargs):
+    try:
+        sst2(**kwargs,logger=logger)
+    except torch.OutOfMemoryError as e:
+        logger.error(e)
+
+
+def augmentation_times():
+    
+    params = {
+                'epochs': 2,
+                'batch_size': 32,
+                'lr': 0.05,
+                'dataset_size': 1000,
+                'max_grad_norm': 5.0,
+                'noise_multiplier': 0.1,
+            }
+
+    s = f"Experiments group: Small datasetsize ({params['dataset_size']}), Augmentations vary"
+    logger_2 = get_file_logger(s, "Different_augs.log")
+    logger_2.info("\n\n"+s)
+    
+    a = Augmentations()
+    con_rep = [a.unaugmented, a.context_replacement]
+    con_ins = [a.unaugmented, a.context_insert]
+    back_trans = [a.unaugmented, a.back_translate]
+    typo = [a.unaugmented, a.typo]
+    del_w = [a.unaugmented, a.del_word]
+    swap_c = [a.unaugmented, a.swap_char]
+
+    loop = [[a.unaugmented,a.synonym_ppdb]]
+
+
+    for t_list in loop:
+        logger_2.info(f"\n\n {t_list[1]}")
+        torch.cuda.empty_cache() 
+        safe_sst2(**params, logger=logger_2,transform_list=t_list)
+
+
+def test_working():
     params = {
             'epochs': 2,
-            'batch_size': 32,
-            'lr': 0.01,
-            'dataset_size': 30000,
-            'max_grad_norm': 15.0,
-            'noise_multiplier': 0.1,
-            'transform_list': Augmentations().K_2()
+            'batch_size': 1,
+            'lr': 0.02,
+            'dataset_size': 10,
+            'max_grad_norm': 2.0,
+            'noise_multiplier': 1.0,
+            #'save_model': "discard.ckpt"
+            'experiment_name': "testing"
         }
 
-    s = "Experiments group: Medium datasetsize (30K), One Augmentation (Synonym)"
-    logger_1 = get_file_logger(s, "medium_dataset_one_aug.log")
+    s = f"test if still working"
+    logger_1 = get_file_logger(s, "scrap.log")
+    logger_1.info("\n\n"+s)
+    logger_1.info(json.dumps(params))
+    params['trainable_param_setter'] = classifier_only # json doesnt like functions
+    params['transform_list'] = Augmentations().synonyms(4)
+
+    safe_sst2(**params, logger=logger_1)
+
+
+def non_dp_K1():
+    params = {
+            'epochs': 10,
+            'batch_size': 256,
+            'lr': 0.01,
+            #'dataset_size': 512,
+            'max_grad_norm': 300.0,
+            'noise_multiplier': 0.0,
+            #'save_model': "only bias non dp.ckpt"
+        }
+
+    s = f"Experiments group: datasetsize full, non-DP but my implementation, Classifier and Pooler"
+    logger_1 = get_file_logger(s, "augmult_K1_non_DP.log")
     logger_1.info("\n\n"+s)
 
     # experiment 1
-    logger_1.info("\n\n huge max clipping: 15, noise: 0.1, biggest avg_phys_batchsize im daring: 32*2, 2 epochs")
-    sst2(**params, logger=logger_1)
-
-    # experiment 2
-    params['max_grad_norm'] = 5
-    logger_1.info("\n\n clipping norm set to 5, rest stays the same")
-    sst2(**params, logger=logger_1)
-
-    # experiment 3
-    params['max_grad_norm'] = 1
-    logger_1.info("\n\n clipping norm set to default of 1, rest stays the same")
-    sst2(**params, logger=logger_1)
-
-
-def exp_2():
-    
-
-    s = "Experiments group: Small datasetsize (10K), Augmentations vary"
-    logger_2 = get_file_logger(s, "Different_augs.log")
-    logger_2.info("\n\n"+s)
-
-    params = {
-            'epochs': 2,
-            'batch_size': 32,
-            'lr': 0.01,
-            'dataset_size': 10000,
-            'max_grad_norm': 15.0,
-            'noise_multiplier': 0.1,
-            'logger' :logger_2,
-        }
-    # experiment 1
-    logger_2.info("\n\n simple and fast augs")
-    sst2(**params, transform_list=Augmentations().fast_augs())
-
-    # experiment 2
-    logger_2.info("\n\n All augs(7)")
-    sst2(**params, transform_list=Augmentations().all_augs())
-    
+    logger_1.info(json.dumps(params))
+    params['trainable_param_setter'] = classifier_and_pooler # json doesnt like functions
+    params['transform_list'] = Augmentations().no_augmentations()
+    safe_sst2(**params, logger=logger_1)
     
 def main():
-    exp_1()
-    exp_2()
+    test_working()
 
 if __name__ == "__main__":
     main()

@@ -11,7 +11,7 @@ def get_file_logger(logger_name, log_file, level=logging.INFO):
     logger.setLevel(level)
     
     # Create a file handler that writes to the specified log file in append mode
-    file_handler = logging.FileHandler(log_file, mode='a')
+    file_handler = logging.FileHandler(f"./logs_and_ckpts/logs/{log_file}", mode='a')
     
     # Create a logging format
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
