@@ -5,6 +5,7 @@ from util.logging_util import get_file_logger
 from sst2 import sst2
 from util.different_finetune_modes import *
 
+
 def safe_sst2(logger,**kwargs):
     try:
         sst2(**kwargs,logger=logger)
@@ -47,9 +48,9 @@ def augmentation_times():
 def test_working():
     params = {
             'epochs': 2,
-            'batch_size': 1,
+            'batch_size': 10,
             'lr': 0.02,
-            'dataset_size': 10,
+            'dataset_size': 100,
             'max_grad_norm': 2.0,
             'noise_multiplier': 1.0,
             #'save_model': "discard.ckpt"
@@ -60,7 +61,8 @@ def test_working():
     logger_1 = get_file_logger(s, "scrap.log")
     logger_1.info("\n\n"+s)
     logger_1.info(json.dumps(params))
-    params['trainable_param_setter'] = classifier_only # json doesnt like functions
+    params['trainable_param_setter'] = bias_and_classifier # json doesnt like functions
+    params['grad_sample_mode'] = "bias_only"
     params['transform_list'] = Augmentations().synonyms(4)
 
     safe_sst2(**params, logger=logger_1)
@@ -74,16 +76,19 @@ def non_dp_K1():
             #'dataset_size': 512,
             'max_grad_norm': 300.0,
             'noise_multiplier': 0.0,
-            #'save_model': "only bias non dp.ckpt"
+            'save_model': "only bias non dp.ckpt",
+            'experiment_name': "test_different_finetune_configurations"
+
         }
 
-    s = f"Experiments group: datasetsize full, non-DP but my implementation, Classifier and Pooler"
+    s = f"Experiments group: datasetsize full, non-DP but my implementation, Only biases and classifier weights"
     logger_1 = get_file_logger(s, "augmult_K1_non_DP.log")
     logger_1.info("\n\n"+s)
 
     # experiment 1
     logger_1.info(json.dumps(params))
-    params['trainable_param_setter'] = classifier_and_pooler # json doesnt like functions
+    params['trainable_param_setter'] = bias_and_classifier # json doesnt like functions
+    params['grad_sample_mode'] = "bias_only"    
     params['transform_list'] = Augmentations().no_augmentations()
     safe_sst2(**params, logger=logger_1)
     

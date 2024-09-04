@@ -24,6 +24,24 @@ def bias_and_classifier(model):
         else:
             p.requires_grad = False
         total_params += p.numel()
+    return total_params,trainable_params 
+
+
+def crosscheck_bias(model):
+    total_params,trainable_params = 0,0
+    for p in model.parameters():
+            p.requires_grad = False
+            total_params += p.numel()
+
+    for n,p in model.bert.pooler.named_parameters():
+        if "bias" in n:
+            p.requires_grad = True
+            trainable_params += p.numel()
+    for p in model.classifier.parameters():
+        p.requires_grad = True
+        trainable_params += p.numel()
+    
+    return total_params,trainable_params 
 
 
 def set_from_layer_list(layer_list, model):
@@ -55,7 +73,7 @@ def main():
 
     #layer_list = [model.bert.pooler, model.classifier]
     #trainable_param_setter = lambda model: set_from_layer_list(layer_list,model)
-    trainable_param_setter = last_3
+    trainable_param_setter = classifier_only
     total_p, trainable_p = trainable_param_setter(model)
 
     print(f"total params: {total_p}, trainable:{trainable_p}")

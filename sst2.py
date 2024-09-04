@@ -1,6 +1,7 @@
 import logging
 import types
 import os
+from uu import Error
 
 import torch
 import torch.optim as optim
@@ -38,7 +39,7 @@ LOGS_PER_EPOCH = 10
 MAX_PHYSICAL_BATCH_SIZE = 512
 
 
-def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier, logger, trainable_param_setter, dataset_size=None, save_model=None, experiment_name = "untitled"):    
+def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier, logger, trainable_param_setter, dataset_size=None, save_model=None, experiment_name = "untitled",grad_sample_mode = "augmult"):    
 
     # ----------- Initialisation -------------
 
@@ -74,7 +75,7 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
 
     # ------------- Logging ----------------------
     
-    wandb.init(project=experiment_name)
+    wandb.init(project=experiment_name, dir="./logs_and_ckpts/wandb")
 
     # Log hyperparameters
     hyperparams = {
@@ -111,7 +112,7 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
         data_loader=mv_train_loader,
         noise_multiplier=noise_multiplier,
         max_grad_norm=max_grad_norm,
-        grad_sample_mode="bias_only",
+        grad_sample_mode=grad_sample_mode, # "bias_only" or "augmult"
     )
 
     # Override the empty batch shapes provided by privacy engine
@@ -154,11 +155,14 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
 
 
     # ------------ Evaluation ---------------------
-    delta = 1 / (dataset_size if dataset_size is not None else len(dataset['train']))
-    real_eps = privacy_engine.accountant.get_epsilon(delta)
-    logger.info(f"accountant epsilon: {real_eps}")
-    wandb.log({"epsilon": real_eps,
-               "delta":delta})
+        delta = 1 / len(modified_trainset)
+        try:
+            real_eps = privacy_engine.accountant.get_epsilon(delta)
+        except Error as error: # TODO what was the exact error?
+            print(error)
+            real_eps = float('inf')
+        logger.info(f"accountant epsilon: {real_eps}")
+        wandb.log({"epsilon": real_eps, "delta":delta})
 
     if save_model is not None:
         torch.save({

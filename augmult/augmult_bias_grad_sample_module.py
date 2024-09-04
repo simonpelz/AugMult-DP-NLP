@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+
 import logging
 import warnings
 from functools import partial
@@ -72,6 +73,8 @@ def promote_current_grad_sample(p: nn.Parameter) -> None:
             else:
                 p.grad_sample = [p.grad_sample, p._current_grad_sample]
         else:
+            if p._current_grad_sample is None:
+                raise ValueError("grad sample is not allowed to be None")
             p.grad_sample = p._current_grad_sample
 
         del p._current_grad_sample
@@ -277,8 +280,12 @@ class GradSampleModuleAugMultBias(AbstractGradSampleModule):
         if not self.hooks_enabled:
             return
         
-        if not module.weight.requires_grad: # TODO ist module.weight immer erreichbar?
-                return
+        # placed in front of saving actual act
+        for _, p in trainable_parameters(module):
+            p._forward_counter += 1
+
+        if not hasattr(module, "weight") or not module.weight.requires_grad:
+            return
 
         if not hasattr(module, "activations"):
             module.activations = []
@@ -286,8 +293,6 @@ class GradSampleModuleAugMultBias(AbstractGradSampleModule):
                 
         module.activations.append([t.detach() for t in forward_input])  # pyre-ignore
 
-        for _, p in trainable_parameters(module):
-            p._forward_counter += 1
 
     def capture_backprops_hook(
         self,
