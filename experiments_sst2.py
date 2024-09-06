@@ -1,7 +1,7 @@
 import json
 import torch
 from augmult.augmentations import Augmentations
-from util.logging_util import get_file_logger
+from util.logging_util import get_file_logger, aug_name
 from sst2 import sst2
 from util.different_finetune_modes import *
 
@@ -13,59 +13,85 @@ def safe_sst2(logger,**kwargs):
         logger.error(e)
 
 
-def augmentation_times():
-    
+def lr():
+
+    s = f"lr"
+    logger = get_file_logger(s, "lr.log")
+
     params = {
-                'epochs': 2,
-                'batch_size': 32,
-                'lr': 0.05,
-                'dataset_size': 1000,
-                'max_grad_norm': 5.0,
-                'noise_multiplier': 0.1,
+                'epochs': 5,
+                'batch_size': 600,
+                'lr': None,
+                'dataset_size': 12000,
+                'max_grad_norm': 1.0,
+                'target_epsilon': 32,
+                #'noise_multiplier': 0.5,
+                #'save_model': None,
+                'experiment_name': s,
+                'logger': logger,
+                'trainable_param_setter': classifier_and_pooler,
+                'grad_sample_mode': "augmult",
+                'transform_list': Augmentations().synonyms(2),
             }
 
-    s = f"Experiments group: Small datasetsize ({params['dataset_size']}), Augmentations vary"
-    logger_2 = get_file_logger(s, "Different_augs.log")
-    logger_2.info("\n\n"+s)
+    for lr in [0.0001,0.001,0.01,0.05,0.1,0.5]:
+        params['lr'] = lr
+        safe_sst2(**params)
+
+
+
+def augmentation_times():
+    s = f"Augmentations time and performance"
+    logger = get_file_logger(s, "Augmentation_comparison.log")
+
+    params = {
+                'epochs': 1,
+                'batch_size': 500,
+                'lr': 0.05,
+                'dataset_size': 1500,
+                'max_grad_norm': 1.0,
+                'target_epsilon': 32,
+                #'noise_multiplier': 0.1,
+                #'save_model': None,
+                'experiment_name': s,
+                'logger': logger,
+                'trainable_param_setter': classifier_and_pooler,
+                'grad_sample_mode': "augmult"
+            }
     
     a = Augmentations()
-    con_rep = [a.unaugmented, a.context_replacement]
-    con_ins = [a.unaugmented, a.context_insert]
-    back_trans = [a.unaugmented, a.back_translate]
-    typo = [a.unaugmented, a.typo]
-    del_w = [a.unaugmented, a.del_word]
-    swap_c = [a.unaugmented, a.swap_char]
+    s = a.single_aug
+    all_augs_separately = [s(a.unaugmented),s(a.context_replacement),s(a.context_insert),s(a.typo),
+                           s(a.del_word),s(a.swap_char),s(a.swap_word)] #,s(a.back_translate)
 
-    loop = [[a.unaugmented,a.synonym_ppdb]]
+    for t_list in all_augs_separately:
+        logger.info(f"{aug_name(t_list[1])}")
+        safe_sst2(**params ,transform_list=t_list)
+        logger.info(f"\n\n")
 
-
-    for t_list in loop:
-        logger_2.info(f"\n\n {t_list[1]}")
-        torch.cuda.empty_cache() 
-        safe_sst2(**params, logger=logger_2,transform_list=t_list)
 
 
 def test_working():
+    s = f"testing"
+    logger = get_file_logger(s, "scrap.log")
+
     params = {
-            'epochs': 2,
-            'batch_size': 10,
-            'lr': 0.02,
-            'dataset_size': 100,
-            'max_grad_norm': 2.0,
-            'noise_multiplier': 1.0,
-            #'save_model': "discard.ckpt"
-            'experiment_name': "testing"
-        }
+                'epochs': 2,
+                'batch_size': 500,
+                'lr': 0.05,
+                'dataset_size': 1000,
+                'max_grad_norm': 1.0,
+                'target_epsilon': 8,
+                #'noise_multiplier': 0.1,
+                #'save_model': None,
+                'experiment_name': s,
+                'logger': logger,
+                'trainable_param_setter': classifier_and_pooler,
+                'grad_sample_mode': "augmult",
+                'transform_list': Augmentations().special_blend_no_reasoning(),
 
-    s = f"test if still working"
-    logger_1 = get_file_logger(s, "scrap.log")
-    logger_1.info("\n\n"+s)
-    logger_1.info(json.dumps(params))
-    params['trainable_param_setter'] = bias_and_classifier # json doesnt like functions
-    params['grad_sample_mode'] = "bias_only"
-    params['transform_list'] = Augmentations().synonyms(4)
-
-    safe_sst2(**params, logger=logger_1)
+            }
+    safe_sst2(**params)
 
 
 def non_dp_K1():
@@ -92,8 +118,33 @@ def non_dp_K1():
     params['transform_list'] = Augmentations().no_augmentations()
     safe_sst2(**params, logger=logger_1)
     
+
+def realistic_eps():
+    #to see if performance comes close
+    s = f"sst2"
+    logger = get_file_logger(s, "Realistic.log")
+
+    params = {
+                'epochs': 5,
+                'batch_size': 500,
+                'lr': 0.05,
+                'dataset_size': None,
+                'max_grad_norm': 1.0,
+                'target_epsilon': 8,
+                #'noise_multiplier': 0.1,
+                'save_model': "epsilon8.ckpt",
+                'experiment_name': s,
+                'logger': logger,
+                'trainable_param_setter': classifier_and_pooler,
+                'grad_sample_mode': "augmult",
+                'transform_list': Augmentations().special_blend_no_reasoning(),
+
+            }
+    safe_sst2(**params)
+
+
 def main():
-    test_working()
+    realistic_eps()
 
 if __name__ == "__main__":
     main()

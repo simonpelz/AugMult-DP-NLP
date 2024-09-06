@@ -3,6 +3,9 @@ import time
 
 import wandb
 
+from augmult.augmentations import Augmentations
+
+
 def get_file_logger(logger_name, log_file, level=logging.INFO):
     # Create a logger
     logger = logging.getLogger(logger_name)
@@ -63,4 +66,19 @@ def track_time(time_list=None,start_time=None):
     return time.time()
 
 
+def _name(aug):
+    if not hasattr(aug,"__self__"):
+        return "unaugmented"
+    else:
+        return aug.__self__.name
+    
+    
+def aug_name(aug_or_list):
+    if type(aug_or_list) is list:
+        ret = []
+        for aug in aug_or_list:
+            ret.append(_name(aug))
+    else:
+        ret = _name(aug_or_list)
+    return ret
 

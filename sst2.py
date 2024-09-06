@@ -18,28 +18,24 @@ from train import train, eval
 from augmult.data import MultiViewTextDataset, non_dp_tokenize_Dataloader
 from util.privacy_engine_util import _prepare_model_modified, dict_wrap_collate_with_empty
 from augmult.augmented_grad_samplers import AugmentationMultiplicity
-from util.logging_util import log_from_dict
+from util.logging_util import log_from_dict, aug_name
 from util.different_finetune_modes import model_and_tokenizer
 
 import wandb
 
-# Disable parallelism for tokenizers
+# Disable parallelism for tokenizers necessary for backtranslation
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 # Model Information
 MODEL_NAME = "bert-base-uncased"
 NUM_LABELS = 2
 
-# Differential privacy parameters
-EPSILON = 16.0
-
 # Environment
 LOGS_PER_EPOCH = 10
-MAX_PHYSICAL_BATCH_SIZE = 512
+MAX_PHYSICAL_BATCH_SIZE = 1500
 
 
-def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier, logger, trainable_param_setter, dataset_size=None, save_model=None, experiment_name = "untitled",grad_sample_mode = "augmult"):    
+def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainable_param_setter, noise_multiplier=None,dataset_size=None, save_model=None, experiment_name = "untitled",grad_sample_mode = "augmult", target_epsilon=None):    
 
     # ----------- Initialisation -------------
 
@@ -49,9 +45,6 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
     logger.info(f"total params: {total_p}, trainable:{trainable_p}")
 
     optimizer = optim.SGD(model.parameters(), lr=lr)
-
-    if not os.environ["TOKENIZERS_PARALLELISM"]:
-        logger.info(f"Tokenizer parallelism turned off")
 
     # Augmentations K
     K = len(transform_list)
@@ -63,6 +56,7 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
         modified_trainset = dataset['train'].select(range(dataset_size))
     else:
         modified_trainset = dataset['train']
+    delta = 1 / len(modified_trainset) # used for epsilon delta
     mv_train_set = MultiViewTextDataset(modified_trainset, tokenizer, transform_list=transform_list)
     mv_train_loader = mv_train_set.__dataloader__(batch_size)
 
@@ -88,7 +82,7 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
         "learning_rate": lr,
         "max_grad_norm": max_grad_norm,
         "noise_multiplier": noise_multiplier,
-        "transform_list": transform_list,
+        "transform_list": aug_name(transform_list),
         "dataset_size": dataset_size
     }
     log_from_dict(logger, hyperparams)
@@ -106,14 +100,22 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
     # Hack to load the custom AugmultGradSamplerModule
     privacy_engine._prepare_model = types.MethodType(_prepare_model_modified, privacy_engine)
 
-    dp_model, dp_optimizer, dp_train_loader = privacy_engine.make_private(
-        module=model,
-        optimizer=optimizer,
-        data_loader=mv_train_loader,
-        noise_multiplier=noise_multiplier,
-        max_grad_norm=max_grad_norm,
-        grad_sample_mode=grad_sample_mode, # "bias_only" or "augmult"
-    )
+
+    make_private_params = {
+        'module': model,
+        'optimizer': optimizer,
+        'data_loader': mv_train_loader,
+        'noise_multiplier': noise_multiplier,
+        'max_grad_norm': max_grad_norm,
+        'grad_sample_mode': grad_sample_mode,  # "bias_only" or "augmult"
+    }
+
+    if target_epsilon is None:
+        dp_model, dp_optimizer, dp_train_loader = privacy_engine.make_private(**make_private_params)
+    else:
+        make_private_params.pop('noise_multiplier',None)
+        make_private_params.update({'target_epsilon': target_epsilon,'target_delta': delta,'epochs': epochs,})
+        dp_model, dp_optimizer, dp_train_loader = privacy_engine.make_private_with_epsilon(**make_private_params)
 
     # Override the empty batch shapes provided by privacy engine
     sample_empty_shapes = {k: (0, *shape_safe(v)) for k, v in mv_train_loader.dataset[0].items()}
@@ -155,20 +157,19 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, noise_multiplier
 
 
     # ------------ Evaluation ---------------------
-        delta = 1 / len(modified_trainset)
-        try:
-            real_eps = privacy_engine.accountant.get_epsilon(delta)
-        except Error as error: # TODO what was the exact error?
-            print(error)
-            real_eps = float('inf')
-        logger.info(f"accountant epsilon: {real_eps}")
-        wandb.log({"epsilon": real_eps, "delta":delta})
+    try:
+        real_eps = privacy_engine.accountant.get_epsilon(delta)
+    except Error as error: # TODO what was the exact error?
+        print(error)
+        real_eps = float('inf')
+    logger.info(f"accountant epsilon: {real_eps}")
+    wandb.log({"epsilon": real_eps, "delta":delta})
 
     if save_model is not None:
         torch.save({
             'acc': valid_acc,
             'model_state_dict': dp_model.state_dict(),
-        }, f"./ckpts/{save_model}")
+        }, f"./logs_and_ckpts/ckpts/{save_model}")
         logger.info(f"saved to:./logs_and_ckpts/ckpts/{save_model}")
 
     logger.info("=" * 50)
