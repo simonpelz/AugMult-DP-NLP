@@ -1,3 +1,4 @@
+from gettext import dpgettext
 import json
 import torch
 from augmult.augmentations import Augmentations
@@ -12,27 +13,38 @@ def safe_sst2(logger,**kwargs):
     except torch.OutOfMemoryError as e:
         logger.error(e)
 
+FAST_K1 = [lambda x: x]
 
-def lr():
+def get_defaults():
 
+    dp_params={ 'max_grad_norm': 1.0,
+                'target_epsilon': 64,
+                'noise_multiplier': None,
+                'grad_sample_mode': "augmult",
+                'transform_list': FAST_K1,
+                }
+
+    log_params={'save_model': None,
+                'experiment_name': None,
+                'logger': None,}
+
+    training_params={
+                    'num_labels': 2,
+                    'epochs': 10,
+                    "early_stop_patience": 5,
+                    'batch_size': 500,
+                    'lr': 0.01,
+                    'dataset_size': 10000,
+                    'trainable_param_setter': classifier_and_pooler,
+                }
+    return  {**dp_params,**log_params, **training_params}
+
+def sweep_lr():
+    params = get_defaults()
     s = f"lr"
     logger = get_file_logger(s, "lr.log")
-
-    params = {
-                'epochs': 5,
-                'batch_size': 600,
-                'lr': None,
-                'dataset_size': 12000,
-                'max_grad_norm': 1.0,
-                'target_epsilon': 32,
-                #'noise_multiplier': 0.5,
-                #'save_model': None,
-                'experiment_name': s,
-                'logger': logger,
-                'trainable_param_setter': classifier_and_pooler,
-                'grad_sample_mode': "augmult",
-                'transform_list': Augmentations().synonyms(2),
-            }
+    params.update({'experiment_name': s,
+                'logger': logger,})
 
     for lr in [0.0001,0.001,0.01,0.05,0.1,0.5]:
         params['lr'] = lr
@@ -94,29 +106,38 @@ def test_working():
     safe_sst2(**params)
 
 
+def dp_K1():
+    hypparams=get_defaults()
+    logger = get_file_logger("sweep-clip", "K1_DP.log")
+    hypparams.update({"logger":logger,})
+
+    for gsn in [0.1,0.5,1,2,5,10,15,100]:
+        name = f"test norm:{gsn},eps:64"
+        lr=gsn/20*0.01 # TODO super wrong
+        hypparams.update({"lr":lr,
+                          "max_grad_norm":gsn,
+                          "experiment_name": name})
+        
+        safe_sst2(**hypparams)
+    
+
 def non_dp_K1():
+    hypparams=get_defaults()
     params = {
-            'epochs': 10,
-            'batch_size': 256,
-            'lr': 0.01,
-            #'dataset_size': 512,
-            'max_grad_norm': 300.0,
-            'noise_multiplier': 0.0,
-            'save_model': "only bias non dp.ckpt",
-            'experiment_name': "test_different_finetune_configurations"
-
+            'max_grad_norm': 10.0,
+            'target_epsilon': 256,
+            'dataset_size': 25000,
         }
+    hypparams.update(params)
 
-    s = f"Experiments group: datasetsize full, non-DP but my implementation, Only biases and classifier weights"
-    logger_1 = get_file_logger(s, "augmult_K1_non_DP.log")
-    logger_1.info("\n\n"+s)
+    logger = get_file_logger("sweep-lr", "K1_DP.log")
+    hypparams.update({"logger":logger,})
 
-    # experiment 1
-    logger_1.info(json.dumps(params))
-    params['trainable_param_setter'] = bias_and_classifier # json doesnt like functions
-    params['grad_sample_mode'] = "bias_only"    
-    params['transform_list'] = Augmentations().no_augmentations()
-    safe_sst2(**params, logger=logger_1)
+    for lr in [0.001,0.01,0.05,0.1,0.5,1]:
+        name = f"Halfsize LR sweep:{lr},test norm:{params['max_grad_norm']},eps:{params['target_epsilon']} (patient)"
+        hypparams.update({"lr":lr,"experiment_name": name})
+        safe_sst2(**hypparams)
+
     
 
 def realistic_eps():
@@ -144,7 +165,7 @@ def realistic_eps():
 
 
 def main():
-    realistic_eps()
+    non_dp_K1()
 
 if __name__ == "__main__":
     main()

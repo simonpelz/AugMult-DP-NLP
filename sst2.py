@@ -1,4 +1,3 @@
-import logging
 import types
 import os
 from uu import Error
@@ -16,6 +15,7 @@ from opacus.data_loader import shape_safe, dtype_safe
 
 from train import train, eval
 from augmult.data import MultiViewTextDataset, non_dp_tokenize_Dataloader
+from util.early_stopper import EarlyStopping
 from util.privacy_engine_util import _prepare_model_modified, dict_wrap_collate_with_empty
 from augmult.augmented_grad_samplers import AugmentationMultiplicity
 from util.logging_util import log_from_dict, aug_name
@@ -26,23 +26,20 @@ import wandb
 # Disable parallelism for tokenizers necessary for backtranslation
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# Model Information
-MODEL_NAME = "bert-base-uncased"
-NUM_LABELS = 2
-
 # Environment
 LOGS_PER_EPOCH = 10
 MAX_PHYSICAL_BATCH_SIZE = 1500
 
 
-def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainable_param_setter, noise_multiplier=None,dataset_size=None, save_model=None, experiment_name = "untitled",grad_sample_mode = "augmult", target_epsilon=None):    
-
+def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainable_param_setter,num_labels, noise_multiplier=None,dataset_size=None, save_model=None, experiment_name = "untitled",grad_sample_mode = "augmult", target_epsilon=None,early_stop_patience=10,model_name = "bert-base-uncased"):    
+    
     # ----------- Initialisation -------------
+    hyperparams = locals().copy()
 
     # Model, Optimizer, Tokenizer
-    model, tokenizer = model_and_tokenizer(MODEL_NAME, NUM_LABELS)
+    model, tokenizer = model_and_tokenizer(model_name, num_labels)
     total_p, trainable_p = trainable_param_setter(model)
-    logger.info(f"total params: {total_p}, trainable:{trainable_p}")
+    finetune_percent = trainable_p / total_p * 100
 
     optimizer = optim.SGD(model.parameters(), lr=lr)
 
@@ -65,26 +62,19 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainabl
     # GPU handling
     device_name = "cuda" if torch.cuda.is_available() else "cpu"
     device = torch.device(device_name)
-    logging.info(f"Using device: {device}")
 
     # ------------- Logging ----------------------
     
-    wandb.init(project=experiment_name, dir="./logs_and_ckpts/wandb")
+    wandb.init(project="sst2", dir="./logs_and_ckpts/wandb", name=experiment_name)
+    es = EarlyStopping(patience=early_stop_patience)
 
     # Log hyperparameters
-    hyperparams = {
-        "model_name": MODEL_NAME,
-        "num_labels": NUM_LABELS,
-        "epochs": epochs,
-        "batch_size": batch_size,
+    hyperparams.update({
         'K': K,
         'batches per epoch': len(mv_train_loader),
-        "learning_rate": lr,
-        "max_grad_norm": max_grad_norm,
-        "noise_multiplier": noise_multiplier,
         "transform_list": aug_name(transform_list),
-        "dataset_size": dataset_size
-    }
+        "finetune_percent":finetune_percent,
+    })
     log_from_dict(logger, hyperparams)
     wandb.config.update(hyperparams)   
 
@@ -107,7 +97,7 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainabl
         'data_loader': mv_train_loader,
         'noise_multiplier': noise_multiplier,
         'max_grad_norm': max_grad_norm,
-        'grad_sample_mode': grad_sample_mode,  # "bias_only" or "augmult"
+        'grad_sample_mode': grad_sample_mode,  # "bias_only" or "augmult" #TODO remove
     }
 
     if target_epsilon is None:
@@ -137,7 +127,7 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainabl
         'dp_optimizer': dp_optimizer,
         'device': device,
         'K': K,
-        'logger': logger,
+        'logger': logger, 
         'logs_per_epoch': LOGS_PER_EPOCH,
         'max_phys_batch_size': MAX_PHYSICAL_BATCH_SIZE,
     }
@@ -148,18 +138,17 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainabl
 
         valid_acc, valid_loss = eval(dp_model, valid_loader, device=device)
         logger.info(f"Validation: acc:{valid_acc}, loss:{valid_loss}")
+        wandb.log({"epoch": i+1,"valid_accuracy": valid_acc,"valid_loss": valid_loss})
 
-        wandb.log({
-            "epoch": i+1,
-            "valid_accuracy": valid_acc,
-            "valid_loss": valid_loss
-        })
+        if es.step(valid_loss): 
+            wandb.log({"Stopped early": True})
+            break
 
 
     # ------------ Evaluation ---------------------
     try:
         real_eps = privacy_engine.accountant.get_epsilon(delta)
-    except Error as error: # TODO what was the exact error?
+    except Error as error: # TODO what was the exact error? something infinity
         print(error)
         real_eps = float('inf')
     logger.info(f"accountant epsilon: {real_eps}")
