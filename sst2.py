@@ -18,7 +18,7 @@ from augmult.data import MultiViewTextDataset, non_dp_tokenize_Dataloader
 from util.early_stopper import EarlyStopping
 from util.privacy_engine_util import _prepare_model_modified, dict_wrap_collate_with_empty
 from augmult.augmented_grad_samplers import AugmentationMultiplicity
-from util.logging_util import log_from_dict, aug_name
+from util.logging_util import aug_name
 from util.different_finetune_modes import model_and_tokenizer
 
 import wandb
@@ -31,7 +31,7 @@ LOGS_PER_EPOCH = 10
 MAX_PHYSICAL_BATCH_SIZE = 1500
 
 
-def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainable_param_setter,num_labels, noise_multiplier=None,dataset_size=None, save_model=None, experiment_name = "untitled",grad_sample_mode = "augmult", target_epsilon=None,early_stop_patience=10,model_name = "bert-base-uncased"):    
+def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, trainable_param_setter,num_labels, noise_multiplier=None,dataset_size=None, save_model=None, experiment_name = "untitled", target_epsilon=None,early_stop_patience=10,model_name = "bert-base-uncased"):    
     
     # ----------- Initialisation -------------
     hyperparams = locals().copy()
@@ -75,7 +75,7 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainabl
         "transform_list": aug_name(transform_list),
         "finetune_percent":finetune_percent,
     })
-    log_from_dict(logger, hyperparams)
+
     wandb.config.update(hyperparams)   
 
     # ------------- Make DP with AugMult -----------------
@@ -97,7 +97,7 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainabl
         'data_loader': mv_train_loader,
         'noise_multiplier': noise_multiplier,
         'max_grad_norm': max_grad_norm,
-        'grad_sample_mode': grad_sample_mode,  # "bias_only" or "augmult" #TODO remove
+        'grad_sample_mode': "augmult",
     }
 
     if target_epsilon is None:
@@ -127,17 +127,14 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainabl
         'dp_optimizer': dp_optimizer,
         'device': device,
         'K': K,
-        'logger': logger, 
         'logs_per_epoch': LOGS_PER_EPOCH,
         'max_phys_batch_size': MAX_PHYSICAL_BATCH_SIZE,
     }
 
     for i in range(epochs):
-        logger.info(f"Epoch {i+1} starting.")
-        train(**train_inputs)
+        train(**train_inputs,epoch=i)
 
         valid_acc, valid_loss = eval(dp_model, valid_loader, device=device)
-        logger.info(f"Validation: acc:{valid_acc}, loss:{valid_loss}")
         wandb.log({"epoch": i+1,"valid_accuracy": valid_acc,"valid_loss": valid_loss})
 
         if es.step(valid_loss): 
@@ -151,7 +148,6 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainabl
     except Error as error: # TODO what was the exact error? something infinity
         print(error)
         real_eps = float('inf')
-    logger.info(f"accountant epsilon: {real_eps}")
     wandb.log({"epsilon": real_eps, "delta":delta})
 
     if save_model is not None:
@@ -159,9 +155,8 @@ def sst2(transform_list, epochs, batch_size, lr, max_grad_norm, logger, trainabl
             'acc': valid_acc,
             'model_state_dict': dp_model.state_dict(),
         }, f"./logs_and_ckpts/ckpts/{save_model}")
-        logger.info(f"saved to:./logs_and_ckpts/ckpts/{save_model}")
+        print(f"saved to:./logs_and_ckpts/ckpts/{save_model}")
 
-    logger.info("=" * 50)
     wandb.finish()
 
     # TODO Multi-GPU

@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from opacus.utils.batch_memory_manager import BatchMemoryManager
+import wandb
 from util.logging_util import track_time, log_metrics
 
 
@@ -10,8 +11,8 @@ def train(
     dp_optimizer,
     device,
     K,
-    logger,
     max_phys_batch_size,
+    epoch,
     logs_per_epoch = 10,
 ):
     
@@ -31,7 +32,7 @@ def train(
     # Time Logging
     data_loading_times, forward_times, backward_times, optimizer_times = [], [], [], []
     start_time = track_time()
-    step = 0
+    step = epoch * len(dp_train_loader)
     # Using BatchMemoryManager for large batches
     with BatchMemoryManager(data_loader=dp_train_loader, max_physical_batch_size=augmentation_max_physical_batchsize, optimizer=dp_optimizer) as memory_safe_data_loader: 
         for batch in memory_safe_data_loader:
@@ -85,7 +86,7 @@ def train(
                         "backward_time": np.mean(backward_times),
                         "data_loading_time": np.mean(data_loading_times),
                     }
-                    log_metrics(step, metrics, logger)
+                    wandb.log(metrics, step=step)
                     
                     # Reset the timers and accumulators
                     optimizer_times, forward_times, backward_times, data_loading_times = [], [], [], []

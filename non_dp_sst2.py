@@ -8,6 +8,7 @@ import torch
 import numpy as np
 
 from datasets import load_dataset
+import wandb
 
 from train import train, eval
 from augmult.data import non_dp_tokenize_Dataloader
@@ -16,8 +17,6 @@ from util.logging_util import get_file_logger
 from util.different_finetune_modes import model_and_tokenizer
 
 import os
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
 
 # Model Information
@@ -29,7 +28,7 @@ NUM_LABELS = 2
 LOGS_PER_EPOCH = 10
 
 
-def non_dp_sst2(epochs,batch_size,lr,logger,trainable_param_setter,dataset_size=None, save_model=None):
+def non_dp_sst2(epochs,batch_size,lr,logger,trainable_param_setter,dataset_size=None, save_model=None, experiment_name = "non_dp"):
     
     # ----------- Initialisation -------------
 
@@ -39,8 +38,6 @@ def non_dp_sst2(epochs,batch_size,lr,logger,trainable_param_setter,dataset_size=
     logger.info(f"total params: {total_p}, trainable:{trainable_p}")
 
     optimizer = optim.SGD(model.parameters(), lr=lr)
-
-    if not os.environ["TOKENIZERS_PARALLELISM"]: logger.info(f"Tokenizer paralellism turned off")
 
     # Dataloaders
     dataset = load_dataset("glue", "sst2")
@@ -58,8 +55,24 @@ def non_dp_sst2(epochs,batch_size,lr,logger,trainable_param_setter,dataset_size=
     model.train()
    
     # ------------- Logging ----------------------
-    d = {'Batchsize':batch_size,'epochs':epochs,'batches per epoch':len(train_loader)}
-    log_from_dict(logger,d)
+    wandb.init(project="sst2", dir="./logs_and_ckpts/wandb", name=experiment_name)
+
+    # Log hyperparameters
+    hyperparams = {
+        "model_name": MODEL_NAME,
+        "num_labels": NUM_LABELS,
+        "epochs": epochs,
+        "batch_size": batch_size,
+        'K': 1,
+        'batches per epoch': len(train_loader),
+        "learning_rate": lr,
+        "max_grad_norm": np.inf,
+        "noise_multiplier": 0,
+        "transform_list": "[unaugmented]",
+        "dataset_size": dataset_size
+    }
+    log_from_dict(logger, hyperparams)
+    wandb.config.update(hyperparams)  
 
     # -------------- Training ----------------------
     train_inputs = {

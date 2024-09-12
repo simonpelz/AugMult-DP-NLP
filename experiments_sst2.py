@@ -1,17 +1,18 @@
 from gettext import dpgettext
 import json
 import torch
+import wandb
 from augmult.augmentations import Augmentations
 from util.logging_util import get_file_logger, aug_name
 from sst2 import sst2
 from util.different_finetune_modes import *
 
 
-def safe_sst2(logger,**kwargs):
+def safe_sst2(**kwargs):
     try:
-        sst2(**kwargs,logger=logger)
+        sst2(**kwargs)
     except torch.OutOfMemoryError as e:
-        logger.error(e)
+        wandb.log({"Cuda OOM": True})
 
 FAST_K1 = [lambda x: x]
 
@@ -20,18 +21,17 @@ def get_defaults():
     dp_params={ 'max_grad_norm': 1.0,
                 'target_epsilon': 64,
                 'noise_multiplier': None,
-                'grad_sample_mode': "augmult",
                 'transform_list': FAST_K1,
                 }
 
     log_params={'save_model': None,
                 'experiment_name': None,
-                'logger': None,}
+                }
 
     training_params={
                     'num_labels': 2,
-                    'epochs': 10,
-                    "early_stop_patience": 5,
+                    'epochs': 6,
+                    "early_stop_patience": 4,
                     'batch_size': 500,
                     'lr': 0.01,
                     'dataset_size': 10000,
@@ -108,64 +108,57 @@ def test_working():
 
 def dp_K1():
     hypparams=get_defaults()
-    logger = get_file_logger("sweep-clip", "K1_DP.log")
-    hypparams.update({"logger":logger,})
+    params = {
+            'max_grad_norm': 1.0,
+            'target_epsilon': 32,
+            'dataset_size': None,
+            'epochs':6,
+            'lr':1,
+        }
+    hypparams.update(params)
 
-    for gsn in [0.1,0.5,1,2,5,10,15,100]:
-        name = f"test norm:{gsn},eps:64"
-        lr=gsn/20*0.01 # TODO super wrong
-        hypparams.update({"lr":lr,
-                          "max_grad_norm":gsn,
-                          "experiment_name": name})
-        
+    for tl in [Augmentations(trnslt=False).eda_changed()]:
+        name = f"Full | K:{len(tl)}"
+        hypparams.update({"experiment_name": name,'transform_list':tl,})
         safe_sst2(**hypparams)
     
 
 def non_dp_K1():
     hypparams=get_defaults()
     params = {
-            'max_grad_norm': 10.0,
-            'target_epsilon': 256,
-            'dataset_size': 25000,
+            'max_grad_norm': 1.0,
+            'target_epsilon': 32,
+            'dataset_size': None,
         }
     hypparams.update(params)
 
-    logger = get_file_logger("sweep-lr", "K1_DP.log")
-    hypparams.update({"logger":logger,})
-
-    for lr in [0.001,0.01,0.05,0.1,0.5,1]:
-        name = f"Halfsize LR sweep:{lr},test norm:{params['max_grad_norm']},eps:{params['target_epsilon']} (patient)"
+    for lr in [0.1,1]:
+        name = f"Full | lr:{lr}, norm:{params['max_grad_norm']},eps:{params['target_epsilon']}"
         hypparams.update({"lr":lr,"experiment_name": name})
         safe_sst2(**hypparams)
 
     
 
 def realistic_eps():
-    #to see if performance comes close
-    s = f"sst2"
-    logger = get_file_logger(s, "Realistic.log")
-
+    hypparams=get_defaults()
     params = {
-                'epochs': 5,
-                'batch_size': 500,
-                'lr': 0.05,
-                'dataset_size': None,
-                'max_grad_norm': 1.0,
-                'target_epsilon': 8,
-                #'noise_multiplier': 0.1,
-                'save_model': "epsilon8.ckpt",
-                'experiment_name': s,
-                'logger': logger,
-                'trainable_param_setter': classifier_and_pooler,
-                'grad_sample_mode': "augmult",
-                'transform_list': Augmentations().special_blend_no_reasoning(),
+            'max_grad_norm': 1.0,
+            'target_epsilon': 32,
+            'dataset_size': None,
+            'epochs':15,
+            'lr':1,
+            'batchsize':2500
+        }
+    hypparams.update(params)
 
-            }
-    safe_sst2(**params)
+    name = f"Full larger batchsize | K:1"
+    hypparams.update({"experiment_name": name,'transform_list':FAST_K1,})
+    safe_sst2(**hypparams)
+    
 
 
 def main():
-    non_dp_K1()
+    realistic_eps()
 
 if __name__ == "__main__":
     main()
