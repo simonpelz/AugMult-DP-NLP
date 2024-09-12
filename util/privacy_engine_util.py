@@ -2,7 +2,11 @@ from functools import partial
 from typing import Sequence, Type, Union, List
 import torch
 import torch.nn as nn
+from torch.utils.data._utils.collate import default_collate
 
+from opacus.data_loader import shape_safe, dtype_safe
+
+from augmult.augmented_grad_samplers import AugmentationMultiplicity
 from augmult.augmult_grad_sample_module import GradSampleModuleAugMult
 from augmult.augmult_bias_grad_sample_module import GradSampleModuleAugMultBias
 
@@ -12,7 +16,21 @@ from opacus.grad_sample.grad_sample_module_fast_gradient_clipping import (
 )
 from opacus.grad_sample.gsm_base import AbstractGradSampleModule
 from opacus.grad_sample.gsm_exp_weights import GradSampleModuleExpandedWeights
-from opacus.grad_sample.gsm_no_op import GradSampleModuleNoOp
+from opacus.grad_sample.gsm_no_op import GradSampleModuleNoOp  
+
+
+def empty_batch_handling(mv_train_loader,dp_train_loader):
+    sample_empty_shapes = {k: (0, *shape_safe(v)) for k, v in mv_train_loader.dataset[0].items()}
+    dtypes = {k: dtype_safe(v) for k, v in mv_train_loader.dataset[0].items()}
+    dp_train_loader.collate_fn = dict_wrap_collate_with_empty(collate_fn=default_collate, sample_empty_shapes=sample_empty_shapes, dtypes=dtypes)
+
+
+def prepare_gradsamplers(K,dp_model):
+    dp_model.K = K
+    augmented = AugmentationMultiplicity(K)
+    dp_model.GRAD_SAMPLERS[nn.Linear] = augmented.compute_linear_grad_sample
+    dp_model.GRAD_SAMPLERS[nn.LayerNorm] = augmented.compute_layer_norm_grad_sample
+    return dp_model
 
 """
 !!!

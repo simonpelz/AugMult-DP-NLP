@@ -63,6 +63,7 @@ def model_and_tokenizer(model_name, num_labels):
     config = AutoConfig.from_pretrained(model_name)
     config.num_labels = num_labels
     model = AutoModelForSequenceClassification.from_pretrained(model_name, config=config)
+    model.train()
     return model, tokenizer
 
 def main():

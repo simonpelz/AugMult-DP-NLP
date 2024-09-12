@@ -1,15 +1,23 @@
-from turtle import st
 import torch
-import numpy as np
 from torch.utils.data import DataLoader
 
 
-def non_dp_tokenize_Dataloader(dataset,tokenizer,batch_size):
+def non_dp_tokenize_dataloader(dataset,tokenizer,batch_size):
     tokens = dataset.map(lambda x: tokenizer(x['sentence'], max_length=128, padding='max_length', truncation=True), batched=True)
     tokens = tokens.remove_columns(['idx','sentence']).rename_column("label", "labels") 
     tokens.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
     dataloader = DataLoader(tokens, shuffle=False, batch_size=batch_size)
     return dataloader
+
+
+def dp_dataloader(trainset,subset,tokenizer,transform_list,batch_size):
+    if subset is not None:
+        modified_trainset = trainset.select(range(subset))
+    else:
+        modified_trainset = trainset
+    mv_train_set = MultiViewTextDataset(modified_trainset, tokenizer, transform_list=transform_list)
+    mv_train_loader = DataLoader(mv_train_set,batch_size,shuffle=False,pin_memory=True,num_workers=0)
+    return mv_train_loader
 
 
 class MultiViewTextDataset(torch.utils.data.Dataset):
@@ -57,7 +65,5 @@ class MultiViewTextDataset(torch.utils.data.Dataset):
 
         return stacked_views
     
-    def __dataloader__(self, batch_size):
-        return DataLoader(self,batch_size,shuffle=False,pin_memory=True,num_workers=len(self.transform_list))
     
 

@@ -12,7 +12,7 @@ def train(
     device,
     K,
     max_phys_batch_size,
-    epoch,
+    steps,
     logs_per_epoch = 10,
 ):
     
@@ -32,7 +32,7 @@ def train(
     # Time Logging
     data_loading_times, forward_times, backward_times, optimizer_times = [], [], [], []
     start_time = track_time()
-    step = epoch * len(dp_train_loader)
+    step = steps
     # Using BatchMemoryManager for large batches
     with BatchMemoryManager(data_loader=dp_train_loader, max_physical_batch_size=augmentation_max_physical_batchsize, optimizer=dp_optimizer) as memory_safe_data_loader: 
         for batch in memory_safe_data_loader:
@@ -91,6 +91,8 @@ def train(
                     # Reset the timers and accumulators
                     optimizer_times, forward_times, backward_times, data_loading_times = [], [], [], []
                     to_mean_accuracies, to_mean_losses = [], []
+                    
+    return step
 
 
 

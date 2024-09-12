@@ -59,11 +59,10 @@ class Augmentations:
                                self.context_replacement, self.context_insert, self.swap_word, self.del_word] #K=17
         return transformation_list[:K]
     
-    def eda_changed(self):
+    def eda_changed(self,emb=False):
         """no delete +3 additional replacements"""
-        transformation_list = [self.unaugmented,
-                                self.synonym_wn, self.swap_word, self.context_insert,
-                                self.glove_replace,self.emb_replace,self.context_replacement,] #K=7
+        transformation_list = [self.unaugmented,self.synonym_wn, self.swap_word, self.context_insert,] #K=4
+        if emb: transformation_list.append([self.glove_replace,self.emb_replace,]) #K=6
         return transformation_list
 
     """def mix_K5(self):
