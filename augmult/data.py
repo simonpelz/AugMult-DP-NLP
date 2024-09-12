@@ -58,6 +58,6 @@ class MultiViewTextDataset(torch.utils.data.Dataset):
         return stacked_views
     
     def __dataloader__(self, batch_size):
-        return DataLoader(self,batch_size,shuffle=False,pin_memory=True)
+        return DataLoader(self,batch_size,shuffle=False,pin_memory=True,num_workers=len(self.transform_list))
     
 

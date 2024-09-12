@@ -27,7 +27,7 @@ class Augmentations:
         
         if trnslt: self.back_translate=naw.BackTranslationAug(device=_get_device(),name="backtranslate",).augment
 
-        emb_param = {"top_k": 3,**word_params}
+        emb_param = {"top_k": 1,**word_params}
         if bert:
             self.context_insert = naw.ContextualWordEmbsAug(**emb_param,model_path='bert-base-uncased', action="insert",name="bert_insert").augment
             self.context_replacement = naw.ContextualWordEmbsAug(**emb_param,model_path='bert-base-uncased', action="substitute",name="bert_replace").augment
@@ -58,6 +58,13 @@ class Augmentations:
                                self.emb_replace, self.emb_insert, self.swap_word, self.del_word, #K=13
                                self.context_replacement, self.context_insert, self.swap_word, self.del_word] #K=17
         return transformation_list[:K]
+    
+    def eda_changed(self):
+        """no delete +3 additional replacements"""
+        transformation_list = [self.unaugmented,
+                                self.synonym_wn, self.swap_word, self.context_insert,
+                                self.glove_replace,self.emb_replace,self.context_replacement,] #K=7
+        return transformation_list
 
     """def mix_K5(self):
         transformation_list = [self.unaugmented, self.synonym_wn,self.synonym_ppdb]
@@ -96,7 +103,7 @@ def _load_emb():
     if not os.path.isfile(w2vec_path):
         DownloadUtil.download_word2vec(dest_dir=_model_dir) # Download word2vec model
 
-    glove_path = os.path.abspath(_model_dir+'glove.6B.300d.txt')
+    glove_path = os.path.abspath(_model_dir+'glove.6B.100d.txt')
     if not os.path.isfile(glove_path):
         DownloadUtil.download_glove(model_name='glove.6B', dest_dir=_model_dir) # Download GloVe model
 
@@ -113,12 +120,12 @@ def _get_device():
 def main():
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-    count = 2
+    count = 4
     #sentence ="Sometimes to understand a word's meaning you need more than a definition; you need to see the word used in a sentence."
-    sentence = """Water flows up the mountain and sun flows down"""
+    sentence = """When you've got snow, it's really hard to learn a snow sport so we looked at all the different ways I could mimic being on snow without actually being on snow."""
     a = Augmentations(trnslt=False,bert=True)
     
-    for t in a.eda(17):
+    for t in a.eda_changed():
         if hasattr(t,"__self__"): print(f"\n{(t.__self__.name)}")
         for _ in range(count):
             print(t(sentence)[0])
