@@ -93,6 +93,19 @@ class Augmentations:
  # ----------------------------------------------------------------------------------------------------------------
 
 
+def get_transforms_from_str(transform_name):
+    if transform_name is None:
+        return [lambda x: x]
+    elif transform_name in ["eda_no_delete4"]:
+        transform_list = Augmentations(trnslt=False,emb=False).eda_changed()
+    elif transform_name in ["eda5","eda9","eda13","eda17"]:
+        k = int(transform_name[3:])
+        transform_list = Augmentations(trnslt=False).eda(k)
+    else:
+        raise NotImplementedError # TODO add support for other augs, and maybe list constructor from string eg. "un_typ_syn_emb_del" -> [...]
+    return transform_list
+
+
 def _load_emb():
     _model_dir = MODEL_DIR
     if not os.path.exists(_model_dir):

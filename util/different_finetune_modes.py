@@ -66,6 +66,14 @@ def model_and_tokenizer(model_name, num_labels):
     model.train()
     return model, tokenizer
 
+
+def get_param_setter_from_str(name):
+    lookup = {"classifier_and_pooler": classifier_and_pooler, "classifier_only": classifier_only, "last_3": last_3}
+    if name in lookup:
+        return lookup[name]
+    else: raise NotImplementedError(f"implement finetune mode: {name}")
+
+
 def main():
     MODEL_NAME = "bert-base-uncased"
     NUM_LABELS = 2

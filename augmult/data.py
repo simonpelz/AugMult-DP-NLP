@@ -1,5 +1,13 @@
 import torch
 from torch.utils.data import DataLoader
+from datasets import load_dataset
+
+
+def get_dataset(dataset_name,glue=True):
+    if glue:
+        dataset = load_dataset("glue", dataset_name)
+    else: raise NotImplementedError
+    return dataset
 
 
 def non_dp_tokenize_dataloader(dataset,tokenizer,batch_size):
