@@ -78,6 +78,7 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
 
     train_inputs = {
         'dp_model': dp_model,
+        'task_name':dataset_name,
         'dp_train_loader': dp_train_loader,
         'dp_optimizer': dp_optimizer,
         'device': device,
@@ -91,8 +92,8 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
         # Train for 1 epoch
         train_inputs['steps'] = train(**train_inputs)
         # Evaluate
-        valid_acc, valid_loss = eval(dp_model, valid_loader, device=device)
-        wandb.log({"epoch": i+1,"valid_accuracy": valid_acc,"valid_loss": valid_loss})
+        valid_metric, valid_loss = eval(dp_model, valid_loader,task_name=dataset_name, device=device)
+        wandb.log({"epoch": i+1,"valid_metric": valid_metric,"valid_loss": valid_loss})
         # Stop early if stagnant
         if early_stop.step(valid_loss): 
             wandb.log({"Stopped early": True})
@@ -112,7 +113,7 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
     # Checkpoint saving
     if save_model is not None:
         torch.save({
-            'acc': valid_acc,
+            'metric': valid_metric,
             'model_state_dict': dp_model.state_dict(),
             'epoch': epochs # TODO stop early handling
         }, f"./logs_and_ckpts/ckpts/{save_model}")
@@ -136,7 +137,7 @@ def parse_args():
     parser.add_argument('--transforms_name', type=str, default=None, help='Augmentations to use')
 
     # Logging and setup etc
-    parser.add_argument('--save_model', type=bool, default=False, help='Whether to save the model')
+    parser.add_argument('--save_model', type=str, default=None, help='Whether to save the model')
     parser.add_argument('--early_stop_patience', type=int, default=10, help='Early stopping patience')
     parser.add_argument('--logs_per_epoch', type=int, default=10, help='how often to log per epoch')
     parser.add_argument('--max_phys_batchsize', type=int, default=1500, help='how many samples fit on the device per step')
@@ -192,24 +193,7 @@ def commandline():
     wandb.finish()
 
 
-def debug():
-    params = {
-    'dataset_name': "qnli",
-    'epochs': 4,  
-    'batch_size': 32,  
-    'lr': 0.001,  
-    'max_grad_norm': 1.0,  
-    'num_labels': 2,  
-    'noise_multiplier': None,  
-    'dataset_size': 1000,  
-    'save_model': False,  
-    'target_epsilon': 32,  
-    'early_stop_patience': 3,  
-    'model_name': "bert-base-uncased",  
-    'glue': True,  
-    'logs_per_epoch': 10,  
-    'max_phys_batchsize': 1500  
-    }
+def debug(params):
 
     wandb.init(project=params['dataset_name'], dir="./logs_and_ckpts/wandb", name="debug")
     wandb.config.update(params)   
@@ -224,6 +208,6 @@ def debug():
 
 
 if __name__ == "__main__":
-    debug()
+    commandline()
 
 
