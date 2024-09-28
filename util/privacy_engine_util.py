@@ -2,7 +2,6 @@ from functools import partial
 from typing import Sequence, Type, Union, List
 import torch
 import torch.nn as nn
-from torch.utils.data._utils.collate import default_collate
 
 from opacus.data_loader import shape_safe, dtype_safe
 
@@ -19,10 +18,10 @@ from opacus.grad_sample.gsm_exp_weights import GradSampleModuleExpandedWeights
 from opacus.grad_sample.gsm_no_op import GradSampleModuleNoOp  
 
 
-def empty_batch_handling(mv_train_loader,dp_train_loader):
+def empty_batch_handling(mv_train_loader,dp_train_loader,mv_collate):
     sample_empty_shapes = {k: (0, *shape_safe(v)) for k, v in mv_train_loader.dataset[0].items()}
     dtypes = {k: dtype_safe(v) for k, v in mv_train_loader.dataset[0].items()}
-    dp_train_loader.collate_fn = dict_wrap_collate_with_empty(collate_fn=default_collate, sample_empty_shapes=sample_empty_shapes, dtypes=dtypes)
+    dp_train_loader.collate_fn = dict_wrap_collate_with_empty(collate_fn=mv_collate, sample_empty_shapes=sample_empty_shapes, dtypes=dtypes)
 
 
 def prepare_gradsamplers(K,dp_model):
@@ -67,11 +66,13 @@ def modified_get_gsm_class(grad_sample_mode: str) -> Type[AbstractGradSampleModu
             f"Allowed values: hooks, functorch, ew, ghost, no_op, augmult"
         )
 
+
 def wrap_model(model: nn.Module, grad_sample_mode: str, *args, **kwargs):
     cls = modified_get_gsm_class(grad_sample_mode)
     if grad_sample_mode == "functorch":
         kwargs["force_functorch"] = True
     return cls(model, *args, **kwargs)
+
 
 def _prepare_model_modified(
         self,

@@ -1,3 +1,6 @@
+from calendar import c
+from collections import defaultdict
+from sympy import re
 import torch
 from torch.utils.data import DataLoader
 from datasets import load_dataset
@@ -18,6 +21,92 @@ def non_dp_tokenize_dataloader(dataset,tokenizer,batch_size):
     return dataloader
 
 
+def unpack_dict_list(list_of_dicts):
+    if len(list_of_dicts) == 1: return list_of_dicts
+    
+    combined_dict = defaultdict(list)
+    for d in list_of_dicts:
+        for key, value in d.items():
+            combined_dict[key].append(value)
+    combined_dict = dict(combined_dict)
+    return combined_dict
+
+
+def init_mv_collate(tokenizer, transform_list,max_length=128):
+    return lambda batch: collate_fn(batch,tokenizer, transform_list,max_length)
+
+def collate_fn(batch,tokenizer, transform_list,max_length=128):
+    
+    combined_batch = unpack_dict_list(batch)
+
+    tokenize_args = {'padding': 'max_length','truncation': True,
+        'max_length': max_length,'return_tensors': 'pt'
+    }
+
+    labels = combined_batch.pop("label") # may raise error but this is only for training!
+    _ = combined_batch.pop("idx", None)
+
+    # TODO kinda hacky because column names are not the same
+    # fails for additional columns that are not sentences
+    grouped_by_aug = [[] for _ in range(len(transform_list))]
+    for i, transform in enumerate(transform_list):
+
+        # augment all sentences
+        augmented_sentences = []
+        for sentence in combined_batch.values():
+            augmented_sentences.append(transform(list(sentence)))
+
+        # tokenize based on sentence count
+        if len(augmented_sentences)==1:
+            tokenized_pairs = tokenizer(augmented_sentences[0],**tokenize_args)
+        elif len(augmented_sentences)==2:
+            tokenized_pairs = tokenizer(augmented_sentences[0],augmented_sentences[1],**tokenize_args)
+        else: raise NotImplementedError
+        grouped_by_aug[i] = tokenized_pairs # is a dict from tokenizer
+
+    # convert to (token, mask etc.) shape to: [K, B, seq_len]
+    # result is dict with {"input_ids":[[B,seq_len] x K ...],"atmask":[[B,seq_len] x K ...], etc.}
+    # we want: {"input_ids":[B, K, seq_len],etc.} (test example: (11,2,128))
+    combined_aug_groups = unpack_dict_list(grouped_by_aug)
+
+    stacked_views = defaultdict(list)
+    for key in grouped_by_aug[0].keys():
+        for per_sample_aug in zip(*combined_aug_groups[key]):
+            per_sample_aug = list(per_sample_aug)
+            stacked_views[key].append(torch.stack(per_sample_aug))
+    stacked_views = dict(stacked_views)
+    stacked_views = {k: torch.stack(v) for k, v in stacked_views.items()}
+
+    stacked_views['labels'] = torch.tensor(labels)
+
+    return stacked_views
+
+
+
+def dp_dataloader(trainset, subset, tokenizer, transform_list, batch_size):
+    if subset is not None:
+        modified_trainset = trainset.select(range(subset))
+    else:
+        modified_trainset = trainset
+
+    #batches_per_epoch = -(len(modified_trainset)// -batch_size) # ceiling div
+        
+    mv_train_loader = DataLoader(
+        modified_trainset,
+        batch_size=batch_size,
+        shuffle=False,
+        pin_memory=True,
+        num_workers=1,
+        prefetch_factor=1,
+
+        # collate will later be overwritten for empty batch handling!
+        collate_fn=lambda batch: collate_fn(batch, tokenizer, transform_list)
+    )
+    return mv_train_loader
+
+"""
+# Old code, too slow
+
 def dp_dataloader(trainset,subset,tokenizer,transform_list,batch_size):
     if subset is not None:
         modified_trainset = trainset.select(range(subset))
@@ -29,9 +118,7 @@ def dp_dataloader(trainset,subset,tokenizer,transform_list,batch_size):
 
 
 class MultiViewTextDataset(torch.utils.data.Dataset):
-    """
-    Extends the Pytorch Dataset Class to Augment text samples during Runtime and stacks them per Sample.
-    """
+
     def __init__(self, pre_dataset, tokenizer, transform_list=None, max_length=128):
         self.pre_dataset = pre_dataset
         self.tokenizer = tokenizer
@@ -73,5 +160,4 @@ class MultiViewTextDataset(torch.utils.data.Dataset):
 
         return stacked_views
     
-    
-
+"""

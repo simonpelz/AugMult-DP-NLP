@@ -34,13 +34,11 @@ def train(
 
     # Time Logging
     data_loading_times, forward_times, backward_times, optimizer_times = [], [], [], []
-    start_time = track_time()
     step = steps
     # Using BatchMemoryManager for large batches
     with BatchMemoryManager(data_loader=dp_train_loader, max_physical_batch_size=augmentation_max_physical_batchsize, optimizer=dp_optimizer) as memory_safe_data_loader: 
+        start_time = track_time()
         for batch in memory_safe_data_loader:
-
-            dp_optimizer.zero_grad(set_to_none=True) 
 
             # reshape batch flatten
             for column in batch:
@@ -54,6 +52,8 @@ def train(
 
             # Forward pass
             batch = {k: v.to(device) for k, v in batch.items()}
+            dp_optimizer.zero_grad(set_to_none=True) 
+
             outputs = dp_model(**batch)
 
             loss = outputs.loss 
