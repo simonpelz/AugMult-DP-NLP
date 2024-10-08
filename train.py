@@ -16,13 +16,10 @@ def train(
     max_phys_batch_size,
     steps,
     task_name,
-    logs_per_epoch = 10,
 ):
     
-    logging_interval = len(dp_train_loader) // logs_per_epoch
-    if logging_interval==0: logging_interval=1
 
-    
+    logging_interval = 10
     to_mean_metrics = []
     to_mean_losses = []
     dp_model.train()
@@ -33,7 +30,8 @@ def train(
     augmentation_max_physical_batchsize = max_phys_batch_size // K
 
     # Time Logging
-    data_loading_times, forward_times, backward_times, optimizer_times = [], [], [], []
+    data_loading_times, forward_times, backward_times, optimizer_times = {"this_batch":[],"log":[]},{"this_batch":[],"log":[]},{"this_batch":[],"log":[]},{"this_batch":[],"log":[]},
+
     step = steps
     # Using BatchMemoryManager for large batches
     with BatchMemoryManager(data_loader=dp_train_loader, max_physical_batch_size=augmentation_max_physical_batchsize, optimizer=dp_optimizer) as memory_safe_data_loader: 
@@ -76,24 +74,28 @@ def train(
             if is_updated: 
                 step += 1  
 
+                for times in (data_loading_times,forward_times,backward_times,optimizer_times):
+                    times["log"].append(sum(times["this_batch"]))
+                    times["this_batch"] = []
+
                 to_mean_metrics.append(metric)
                 to_mean_losses.append(loss.item())
-                if step % logging_interval == 0:
+                if step % logging_interval == logging_interval-1:
                     l, m = np.mean(to_mean_losses), np.mean(to_mean_metrics)
                     stats = {
                         "train_loss": l,
                         "train_metric": m,
-                        "optimizer_time": np.mean(optimizer_times),
-                        "forward_time": np.mean(forward_times),
-                        "backward_time": np.mean(backward_times),
-                        "data_loading_time": np.mean(data_loading_times),
+                        "optimizer_time": np.mean(optimizer_times["log"]),
+                        "forward_time": np.mean(forward_times["log"]),
+                        "backward_time": np.mean(backward_times["log"]),
+                        "data_loading_time": np.mean(data_loading_times["log"]),
                     }
                     wandb.log(stats, step=step)
                     
                     # Reset the timers and accumulators
-                    optimizer_times, forward_times, backward_times, data_loading_times = [], [], [], []
+                    for times in (data_loading_times,forward_times,backward_times,optimizer_times): times = {"this_batch":[],"log":[]}
                     to_mean_metrics, to_mean_losses = [], []
-                    
+      
     return step
 
 
