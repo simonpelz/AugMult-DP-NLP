@@ -1,6 +1,7 @@
 import argparse
-import types
+import gc
 import os
+import types
 from uu import Error
 
 import torch
@@ -13,8 +14,8 @@ from augmult.augmentations import get_transforms_from_str
 from train import train, eval
 from augmult.data import dp_dataloader, init_mv_collate, non_dp_tokenize_dataloader, get_dataset
 from util.early_stopper import EarlyStopping
-from util.privacy_engine_util import _prepare_model_modified, empty_batch_handling, prepare_gradsamplers
-from util.logging_util import aug_name
+from util.privacy_engine_util import _prepare_model_modified, empty_batch_handling, prepare_gradsamplers, add_noise
+from util.logging_util import aug_name, remove_ckpt, save_ckpt
 from util.different_finetune_modes import get_param_setter_from_str, model_and_tokenizer
 
 import wandb
@@ -22,11 +23,21 @@ import wandb
 import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module='torch')
 
-# Disable parallelism for tokenizers necessary for backtranslation
-#os.environ["TOKENIZERS_PARALLELISM"] = "false" # TODO move to augmentation class in trslt=True
+
+def wrap_run_cuda(params):
+    try:
+        score = run(**params)
+    except Error as e:
+        wandb.config.update({"failed_because":e})
+        print("\n\n---------------\nError\n--------\n"+e)
+        raise e
+    
+    torch.cuda.empty_cache()
+    gc.collect()
+    return score
 
 
-def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, trainable_param_setter, num_labels, noise_multiplier=None, dataset_size=None, save_model=None, target_epsilon=None, early_stop_patience=10, model_name = "bert-base-uncased", glue=True, logs_per_epoch=10,max_phys_batchsize=1500,total_steps=None):    
+def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, trainable_param_setter, num_labels, noise_multiplier=None, dataset_size=None, save_model=None, target_epsilon=None, early_stop_patience=10, model_name = "bert-base-uncased", glue=True, max_phys_batchsize=1500,total_steps=None):    
 
     # ---------------- Initialisation ------------------
     
@@ -46,16 +57,19 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
     steps_per_epoch = len(mv_train_loader)
     if epochs is None:
         if total_steps is None: raise ValueError
-        epochs = total_steps//steps_per_epoch
-        early_stop_patience = max(4,(epochs//3))
+        epochs = -(total_steps// -steps_per_epoch)
+        early_stop_patience = max(3,(epochs//4))
 
     # Logging
+    n_samples = len(mv_train_loader.dataset)
+    sampling_rate = batch_size / n_samples
+
     wandb.config.update({"early_stop_patience":early_stop_patience,"epochs":epochs,'K': K,'batches per epoch': steps_per_epoch,
-        "transform_list": aug_name(transform_list),"finetune_percent":finetune_percent,})
+        "transform_list": aug_name(transform_list),"finetune_percent":finetune_percent,"sampling_rate":sampling_rate,})
     
     # ------------- Make DP with AugMult -----------------
 
-    delta = 1 / len(mv_train_loader.dataset)
+    delta = 1 / n_samples
     early_stop = EarlyStopping(patience=early_stop_patience)
 
     # Ensure DP compatibility
@@ -63,7 +77,7 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
         model = ModuleValidator.fix(model)
 
     privacy_engine = PrivacyEngine()
-
+   
     # Hack to load the custom AugmultGradSamplerModule
     privacy_engine._prepare_model = types.MethodType(_prepare_model_modified, privacy_engine)
 
@@ -74,6 +88,11 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
     else:
         dp_model, dp_optimizer, dp_train_loader = privacy_engine.make_private_with_epsilon(**make_private_params,target_epsilon=target_epsilon,target_delta=delta,epochs=epochs)
     
+    # Hack to modify Optimizer
+    dp_optimizer.add_noise = types.MethodType(add_noise, dp_optimizer)
+
+    wandb.config.update({"noise_multiplier": dp_optimizer.noise_multiplier})
+
     # Override the empty batch shapes provided by privacy engine
     mv_collate = init_mv_collate(tokenizer,transform_list,max_length=128)
     empty_batch_handling(mv_train_loader=mv_train_loader,dp_train_loader=dp_train_loader,mv_collate=mv_collate)
@@ -93,45 +112,45 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
         'dp_optimizer': dp_optimizer,
         'device': device,
         'K': K,
-        'logs_per_epoch': logs_per_epoch,
         'max_phys_batch_size': max_phys_batchsize,
         'steps': 0,
     }
 
     valid_metric = 0
+    best_metric = 0
     for i in range(epochs):
         # Train for 1 epoch
         train_inputs['steps'] = train(**train_inputs)
         # Evaluate
         valid_metric, valid_loss = eval(dp_model, valid_loader,task_name=dataset_name, device=device)
         wandb.log({"epoch": i+1,"valid_metric": valid_metric,"valid_loss": valid_loss})
-        # Stop early if stagnant
+
         if early_stop.step(valid_loss): 
             wandb.log({"Stopped early": True})
             break
+        if save_model and valid_metric >= 0.8 and early_stop.num_bad_epochs == 0: 
+            best_metric = valid_metric
+            d = wandb.config.as_dict().update({"steps":train_inputs['steps']})
+            save_ckpt(ckpt_dict=d,privacy_engine=privacy_engine,model=dp_model,filename=f"best_versions/{wandb.run.name}", overwrite = True)
+
 
 
     # ------------ Evaluation ---------------------
 
     # Privacy accounting
     try:
-        real_eps = privacy_engine.accountant.get_epsilon(delta)
-    except Error as error: # TODO what was the exact error? something infinity
-        print(error)
+        real_eps = privacy_engine.accountant.get_epsilon(delta=delta)
+    except OverflowError as error:
         real_eps = float('inf')
     wandb.log({"epsilon": real_eps, "delta":delta})
 
     # Checkpoint saving
-    if save_model is not None:
-        torch.save({
-            'metric': valid_metric,
-            'model_state_dict': dp_model.state_dict(),
-            'epoch': epochs # TODO stop early handling
-        }, f"./logs_and_ckpts/ckpts/{save_model}")
-        print(f"saved to:./logs_and_ckpts/ckpts/{save_model}")
+    if save_model is not None: 
+        d = wandb.config.as_dict().update({"steps":train_inputs['steps']})
+        save_ckpt(ckpt_dict=d,privacy_engine=privacy_engine,model=dp_model,filename=f"{save_model}_{wandb.run.name}")
+        if best_metric < valid_metric: remove_ckpt(f"best_versions/{wandb.run.name}")
 
-    # TODO is this smart? edgecase epoch=0 etc. returning for sweep setup
-    return valid_metric
+    if valid_metric: return valid_metric # returning for sweep setup
 
 
 def parse_args():
@@ -153,7 +172,6 @@ def parse_args():
     # Logging and setup etc
     parser.add_argument('--save_model', type=str, default=None, help='Whether to save the model')
     parser.add_argument('--early_stop_patience', type=int, default=10, help='Early stopping patience')
-    parser.add_argument('--logs_per_epoch', type=int, default=10, help='how often to log per epoch')
     parser.add_argument('--max_phys_batchsize', type=int, default=1500, help='how many samples fit on the device per step')
     parser.add_argument('--param_setter', type=str, default="classifier_and_pooler", help='Dataset name to use')
 
@@ -173,7 +191,7 @@ def commandline():
     args = parse_args()
 
     # ------------- Logging ----------------------    
-    wandb.init(project=args.dataset_name, dir="./logs_and_ckpts/wandb", name=args.experiment_name)
+    wandb.init(project=args.dataset_name, name=args.experiment_name)
 
     wandb.config.update(vars(args))   
 
@@ -200,7 +218,6 @@ def commandline():
         early_stop_patience=args.early_stop_patience,
         model_name=args.model_name,
         glue=args.glue,
-        logs_per_epoch=args.logs_per_epoch,
         max_phys_batchsize=args.max_phys_batchsize
     )
 
@@ -209,7 +226,7 @@ def commandline():
 
 def debug(params):
 
-    wandb.init(project=params['dataset_name'], dir="./logs_and_ckpts/wandb", name="debug")
+    wandb.init(project=params['dataset_name'], name="debug")
     wandb.config.update(params)   
 
     trainable_param_setter = get_param_setter_from_str("classifier_and_pooler")

@@ -17,6 +17,8 @@ from opacus.grad_sample.gsm_base import AbstractGradSampleModule
 from opacus.grad_sample.gsm_exp_weights import GradSampleModuleExpandedWeights
 from opacus.grad_sample.gsm_no_op import GradSampleModuleNoOp  
 
+from opacus.optimizers.optimizer import _check_processed_flag,_generate_noise,_mark_as_processed
+
 
 def empty_batch_handling(mv_train_loader,dp_train_loader,mv_collate):
     sample_empty_shapes = {k: (0, *shape_safe(v)) for k, v in mv_train_loader.dataset[0].items()}
@@ -142,3 +144,24 @@ def dict_wrap_collate_with_empty(*,collate_fn,sample_empty_shapes,dtypes,):
         sample_empty_shapes=sample_empty_shapes,
         dtypes=dtypes,
     )
+
+
+def add_noise(self):
+    """
+    #alternative implementation, which makes performance less dependent on max gradnorm C as described in Deepmind paper
+    #Adds noise to clipped gradients. Stores clipped and noised result in ``p.grad`
+"""
+
+    for p in self.params:
+        _check_processed_flag(p.summed_grad)
+        p.summed_grad /= self.max_grad_norm
+        noise = _generate_noise(
+            std=self.noise_multiplier,
+            reference=p.summed_grad,
+            generator=self.generator,
+            secure_mode=self.secure_mode,
+        )
+        p.grad = (p.summed_grad + noise).view_as(p)
+
+        _mark_as_processed(p.summed_grad)
+        
