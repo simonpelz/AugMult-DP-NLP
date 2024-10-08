@@ -6,22 +6,25 @@ from nlpaug.util.file.download import DownloadUtil
 import torch
 import os
 
-MODEL_DIR = './augmentation_models/'
 
+def flexible_unaugmented(text,n=1):
+    if n==1: return text
+    else: return [text for _ in range(n)]
 
 class Augmentations:
 
     def __init__(self,trnslt=True, bert=True, emb=True):
-
-        self.unaugmented = lambda x: x
-
+        # Disable parallelism for tokenizers necessary for backtranslation
+        #if trnslt: os.environ["TOKENIZERS_PARALLELISM"] = "false"
+        
+        self.unaugmented = flexible_unaugmented
         self.synonym_wn = naw.SynonymAug(aug_src='wordnet',name="wordnet_replace").augment
 
         char_param = {'aug_char_p': 0.1,'aug_word_p': 0.2,'include_upper_case': False,'include_numeric': False}
         self.typo = nac.KeyboardAug(**char_param, include_special_char=False,name="typo").augment
         self.swap_char = nac.RandomCharAug(**char_param, action="swap",name="char_swap").augment
 
-        word_params = {"aug_p":0.1,"aug_max":5,}
+        word_params = {"aug_p":0.1,"aug_max":10,}
         self.swap_word = naw.RandomWordAug(action="swap",**word_params,name="word_swap").augment
         self.del_word = naw.RandomWordAug(**word_params,name="word_delete").augment
         
@@ -48,6 +51,11 @@ class Augmentations:
     def special_blend_no_reasoning(self):
         transformation_list = [self.unaugmented,self.synonym_wn,self.synonym_wn,self.swap_word,self.typo]#self.context_insert,self.context_replacement,]
         return transformation_list
+    
+    def cola(self):
+        transformation_list = [self.unaugmented,self.glove_replace, self.glove_insert,
+                            self.synonym_wn, self.emb_insert, self.emb_replace]
+        return transformation_list
 
     def eda(self,K):
         if K not in (5,9,13,17):
@@ -59,10 +67,10 @@ class Augmentations:
                                self.context_replacement, self.context_insert, self.swap_word, self.del_word] #K=17
         return transformation_list[:K]
     
-    def eda_changed(self,emb=False):
+    def eda_changed(self,extended=False):
         """no delete +3 additional replacements"""
-        transformation_list = [self.unaugmented,self.synonym_wn, self.swap_word, self.context_insert,] #K=4
-        if emb: transformation_list.append([self.glove_replace,self.emb_replace,]) #K=6
+        transformation_list = [self.unaugmented,self.synonym_wn, self.swap_word, self.emb_insert]#self.context_insert,] #K=4
+        if extended: transformation_list.append([self.glove_replace,self.emb_replace,]) #K=6
         return transformation_list
 
     """def mix_K5(self):
@@ -87,6 +95,9 @@ class Augmentations:
                                self.del_word, self.swap_char]
         return transformation_list
     
+    def eda_bert(self):
+        return [self.unaugmented,self.synonym_wn, self.swap_word, self.context_insert,self.del_word]
+    
     def single_aug(self,aug):
         return [self.unaugmented,aug]
     
@@ -96,18 +107,23 @@ class Augmentations:
 def get_transforms_from_str(transform_name):
     if transform_name is None:
         return [lambda x: x]
+    elif transform_name == "eda_bert":
+        transform_list = Augmentations(trnslt=False,emb=False).eda_bert()
     elif transform_name in ["eda_no_delete4"]:
-        transform_list = Augmentations(trnslt=False,emb=False).eda_changed()
+        transform_list = Augmentations(trnslt=False,emb=True).eda_changed()
     elif transform_name in ["eda5","eda9","eda13","eda17"]:
         k = int(transform_name[3:])
         transform_list = Augmentations(trnslt=False).eda(k)
+    elif transform_name == "cola":
+        transform_list = Augmentations(trnslt=False,bert=False).cola()
     else:
         raise NotImplementedError # TODO add support for other augs, and maybe list constructor from string eg. "un_typ_syn_emb_del" -> [...]
     return transform_list
 
 
 def _load_emb():
-    _model_dir = MODEL_DIR
+    _model_dir = os.environ.get("MODEL_DIR", './augmentation_models/')
+
     if not os.path.exists(_model_dir):
         os.makedirs(_model_dir)
 
@@ -115,7 +131,7 @@ def _load_emb():
     if not os.path.isfile(w2vec_path):
         DownloadUtil.download_word2vec(dest_dir=_model_dir) # Download word2vec model
 
-    glove_path = os.path.abspath(_model_dir+'glove.6B.100d.txt')
+    glove_path = os.path.abspath(_model_dir+'glove.6B.300d.txt')
     if not os.path.isfile(glove_path):
         DownloadUtil.download_glove(model_name='glove.6B', dest_dir=_model_dir) # Download GloVe model
 
@@ -130,23 +146,19 @@ def _get_device():
 
 
 def main():
-    os.environ["TOKENIZERS_PARALLELISM"] = "false"
-
-    count = 4
+    count = 1
     #sentence ="Sometimes to understand a word's meaning you need more than a definition; you need to see the word used in a sentence."
     sentence = """When you've got snow, it's really hard to learn a snow sport so we looked at all the different ways I could mimic being on snow without actually being on snow."""
-    a = Augmentations(trnslt=False,bert=True)
     
-    for t in a.eda_changed():
+    for t in get_transforms_from_str("eda5"):
         if hasattr(t,"__self__"): print(f"\n{(t.__self__.name)}")
         for _ in range(count):
             print(t(sentence)[0])
 
 
-    """ 
     s = a.single_aug
-    #all_augs_separately = [s(a.unaugmented),s(a.context_replacement),s(a.context_insert),s(a.typo),
-    #                      s(a.del_word),s(a.swap_char),s(a.swap_word),s(a.emb_insert),s(a.emb_replace)]#,s(a.back_translate)
+    all_augs_separately = [s(a.unaugmented),s(a.context_replacement),s(a.context_insert),s(a.typo),
+                          s(a.del_word),s(a.swap_char),s(a.swap_word),s(a.emb_insert),s(a.emb_replace)]#,s(a.back_translate)
     all_augs_separately = [s(a.synonym_wn),s(a.emb_replace),s(a.glove_replace)]#,s(a.context_replacement)]
 
     print(sentence)
@@ -154,7 +166,7 @@ def main():
         t = t_list[1]
         print(f"\n{(t.__self__.name )}")
         for _ in range(count):
-            print(t(sentence)[0])"""
+            print(t(sentence)[0])
 
 
 if __name__ == "__main__":

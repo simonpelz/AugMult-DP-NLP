@@ -389,9 +389,9 @@ class GradSampleModuleAugMult(AbstractGradSampleModule):
             module.max_batch_len = _get_batch_size(
                 module=module,
                 batch_dim=batch_dim,
-            ) // self.K # TODO K is used here
+            ) // self.K
         #print(f"act:{np.shape([m.numpy() for m in module.activations])}")
-        activations = module.activations.pop()[0] #TODO is this correct? IMPORTANT!!
+        activations = module.activations.pop()[0]
 
         n = module.max_batch_len
         if loss_reduction == "mean":

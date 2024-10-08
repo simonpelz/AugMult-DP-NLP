@@ -21,9 +21,7 @@ def non_dp_tokenize_dataloader(dataset,tokenizer,batch_size):
     return dataloader
 
 
-def unpack_dict_list(list_of_dicts):
-    if len(list_of_dicts) == 1: return list_of_dicts
-    
+def unpack_dict_list(list_of_dicts):    
     combined_dict = defaultdict(list)
     for d in list_of_dicts:
         for key, value in d.items():

@@ -1,9 +1,23 @@
 import logging
+import os
 import time
 
 import wandb
 
-from augmult.augmentations import Augmentations
+CKPT_PATH = os.environ.get("CKPT_PATH","./logs_and_ckpts/ckpts")
+
+def _get_path(filename):
+    return f"{CKPT_PATH}/{filename}.ckpt"
+
+def save_ckpt(ckpt_dict, privacy_engine, model, filename,):
+    privacy_engine.save_checkpoint(module=model,checkpoint_dict=ckpt_dict, path = _get_path(filename))
+
+
+def remove_ckpt(filename):
+    path = _get_path(filename)
+    if os.path.exists(path):
+        os.remove(path)
+
 
 
 def get_file_logger(logger_name, log_file, level=logging.INFO):
@@ -57,12 +71,13 @@ def log_metrics(step, metrics, logger=None):
 
 
 
-def track_time(time_list=None,start_time=None):
-    if time_list is not None:
-        if start_time is None:
-            pass
+def track_time(time_dict=None,start_time=None):
+    if time_dict is not None:
+        if start_time is None: pass
+        if "this_batch" not in time_dict:
+            time_dict["this_batch"] = []
         delta = time.time() - start_time
-        time_list.append(delta)
+        time_dict["this_batch"].append(delta)
     return time.time()
 
 
