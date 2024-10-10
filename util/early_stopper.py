@@ -8,6 +8,7 @@ class EarlyStopping(object):
         self.min_delta = min_delta
         self.patience = patience
         self.best = None
+        self.last = None
         self.num_bad_epochs = 0
         self.is_better = None
         self._init_is_better(mode, min_delta, percentage)
@@ -34,12 +35,12 @@ class EarlyStopping(object):
         else:
             self.num_bad_epochs += 1
 
+        if not self.is_better(metrics, self.last):
+            if self.num_bad_epochs >= self.patience:
+                print('terminating because of early stopping!')
+                return True
 
-        if self.num_bad_epochs >= self.patience:
-            print('terminating because of early stopping!')
-            return True
-
-
+        self.last = metrics
         return False
 
 
