@@ -11,7 +11,11 @@ NUM_LABELS = 2
 
 
 def main():
-    wandb.init(resume=True)
+    # wrapping needed to pass wandb.config, couldnt simplify
+    # + logic to resume run when preempted
+    run_id = os.environ.get("SLURM_JOB_ID")
+    if run_id: wandb.init(resume='allow',id=run_id)
+    else: wandb.init()
     objective(wandb.config)
 
 
@@ -34,19 +38,19 @@ sweep_configuration = {
     "metric": {"goal": "maximize", "name": "valid_metric"},
     "parameters": {
 
-        "total_steps": {"value": 1000}, #or 1500
+        "total_steps": {"value": 800},
 
-        "batch_size": {"values":[256,512,1024,2048,4096]},
+        "batch_size": {"values":[256,512,1024,2048]},
 
-        "lr": {"values":[0.25,0.5,0.75,1,1.5,2]},
+        "lr": {"values":[0.5,1,2]},
 
         "max_grad_norm": {"value":1},
-        "transform_name": {"value": "eda5"},
+        "transform_name": {"value": None},
 
         "target_epsilon": {"value": 8},   
 
         "dataset_size": {"value": None},   
-        "save_model": {"value": "sst2_e8_k5"},   
+        "save_model": {"value": "sst2_e8_k0"},   
         
         # Static
         "dataset_name": {"value": DATASET},   

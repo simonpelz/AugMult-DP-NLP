@@ -4,14 +4,18 @@ import time
 
 import wandb
 
-CKPT_PATH = os.environ.get("CKPT_PATH","./logs_and_ckpts/ckpts")
 
 def _get_path(filename):
-    return f"{CKPT_PATH}/{filename}.ckpt"
+    CKPT_PATH = os.environ.get("CKPT_PATH")
+    p = f"{CKPT_PATH}/{filename}.ckpt"
+    if os.path.isdir(CKPT_PATH): return p
+    else: raise NotADirectoryError
 
 def save_ckpt(ckpt_dict, privacy_engine, model, filename,):
     privacy_engine.save_checkpoint(module=model,checkpoint_dict=ckpt_dict, path = _get_path(filename))
 
+def load_ckpt(privacy_engine, model, filename):
+    return privacy_engine.load_checkpoint(path=_get_path(filename),module=model,)
 
 def remove_ckpt(filename):
     path = _get_path(filename)

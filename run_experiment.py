@@ -15,7 +15,7 @@ from train import train, eval
 from augmult.data import dp_dataloader, init_mv_collate, non_dp_tokenize_dataloader, get_dataset
 from util.early_stopper import EarlyStopping
 from util.privacy_engine_util import _prepare_model_modified, empty_batch_handling, prepare_gradsamplers, add_noise
-from util.logging_util import aug_name, remove_ckpt, save_ckpt
+from util.logging_util import aug_name, load_ckpt, save_ckpt
 from util.different_finetune_modes import get_param_setter_from_str, model_and_tokenizer
 
 import wandb
@@ -40,7 +40,6 @@ def wrap_run_cuda(params):
 def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, trainable_param_setter, num_labels, noise_multiplier=None, dataset_size=None, save_model=None, target_epsilon=None, early_stop_patience=10, model_name = "bert-base-uncased", glue=True, max_phys_batchsize=1500,total_steps=None):    
 
     # ---------------- Initialisation ------------------
-    
     # Model, Tokenizer
     model, tokenizer = model_and_tokenizer(model_name, num_labels)
     total_p, trainable_p = trainable_param_setter(model)
@@ -58,7 +57,7 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
     if epochs is None:
         if total_steps is None: raise ValueError
         epochs = -(total_steps// -steps_per_epoch)
-        early_stop_patience = max(3,(epochs//4))
+        early_stop_patience = max(4,(epochs//3))
 
     # Logging
     n_samples = len(mv_train_loader.dataset)
@@ -88,6 +87,9 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
     else:
         dp_model, dp_optimizer, dp_train_loader = privacy_engine.make_private_with_epsilon(**make_private_params,target_epsilon=target_epsilon,target_delta=delta,epochs=epochs)
     
+    resume_ckpt = os.environ.get("CKPT_ID",None)
+    ckpt_dict = load_ckpt(privacy_engine,dp_model,resume_ckpt) if resume_ckpt is not None else {}
+
     # Hack to modify Optimizer
     dp_optimizer.add_noise = types.MethodType(add_noise, dp_optimizer)
 
@@ -105,6 +107,8 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dp_model.to(device=device)
 
+    start_epoch=ckpt_dict.get("epoch",0) # because logging starts counting at 1 not 0, this is correct
+    steps = steps_per_epoch*start_epoch
     train_inputs = {
         'dp_model': dp_model,
         'task_name':dataset_name,
@@ -113,42 +117,34 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
         'device': device,
         'K': K,
         'max_phys_batch_size': max_phys_batchsize,
-        'steps': 0,
+        'steps': steps, # possibly overwrite some logged steps when requeueing (real batchsize unknown)
     }
 
     valid_metric = 0
-    best_metric = 0
-    for i in range(epochs):
+    for i in range(start_epoch,epochs):
         # Train for 1 epoch
         train_inputs['steps'] = train(**train_inputs)
         # Evaluate
         valid_metric, valid_loss = eval(dp_model, valid_loader,task_name=dataset_name, device=device)
         wandb.log({"epoch": i+1,"valid_metric": valid_metric,"valid_loss": valid_loss})
-
+        # early stopping
         if early_stop.step(valid_loss): 
-            wandb.log({"Stopped early": True})
+            wandb.config.update({"Stopped early": True})
             break
-        if save_model and valid_metric >= 0.8 and early_stop.num_bad_epochs == 0: 
-            best_metric = valid_metric
-            d = wandb.config.as_dict().update({"steps":train_inputs['steps']})
-            save_ckpt(ckpt_dict=d,privacy_engine=privacy_engine,model=dp_model,filename=f"best_versions/{wandb.run.name}", overwrite = True)
-
-
+        # save ckpt
+        if save_model:
+            d = wandb.config.as_dict()
+            d["epoch"]=i+1
+            save_ckpt(ckpt_dict=d,privacy_engine=privacy_engine,model=dp_model,filename=f"{wandb.run.id}")#f"{save_model}_{wandb.run.name}")
 
     # ------------ Evaluation ---------------------
 
-    # Privacy accounting
+    # Privacy
     try:
         real_eps = privacy_engine.accountant.get_epsilon(delta=delta)
     except OverflowError as error:
         real_eps = float('inf')
     wandb.log({"epsilon": real_eps, "delta":delta})
-
-    # Checkpoint saving
-    if save_model is not None: 
-        d = wandb.config.as_dict().update({"steps":train_inputs['steps']})
-        save_ckpt(ckpt_dict=d,privacy_engine=privacy_engine,model=dp_model,filename=f"{save_model}_{wandb.run.name}")
-        if best_metric < valid_metric: remove_ckpt(f"best_versions/{wandb.run.name}")
 
     if valid_metric: return valid_metric # returning for sweep setup
 

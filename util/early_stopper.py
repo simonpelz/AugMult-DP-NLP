@@ -8,7 +8,7 @@ class EarlyStopping(object):
         self.min_delta = min_delta
         self.patience = patience
         self.best = None
-        self.last = None
+        self.last = 999999 if mode =='min' else 0
         self.num_bad_epochs = 0
         self.is_better = None
         self._init_is_better(mode, min_delta, percentage)
