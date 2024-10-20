@@ -1,5 +1,6 @@
 import os
 import wandb
+import signal
 from argparse import ArgumentParser
 
 from init_sweep import main
@@ -11,6 +12,11 @@ def check_dirs():
             return False
     return True
 
+def signal_handler(signum, frame):
+    wandb.mark_preempting()
+    exit(1)
+
+
 if __name__ == "__main__":
     # Args
     parser = ArgumentParser()
@@ -18,20 +24,33 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Path handling
-    os.environ["WANDB_DIR"] = "./logs_and_ckpts"
-    os.environ["MODEL_DIR"] = './augmentation_models/'
-    os.environ["CKPT_PATH"] = "./logs_and_ckpts/ckpts"
+    job_id = os.environ.get("SLURM_JOB_ID")
+    if job_id is None: raise EnvironmentError()
+
+    os.environ["WANDB_DIR"] = "REPLACE"
+    os.environ["MODEL_DIR"] = 'REPLACE'
+    ckpt_path = f"REPLACE/{job_id}/ckpts"
+    os.makedirs(ckpt_path, exist_ok = True)
+    os.environ["CKPT_PATH"] = ckpt_path
     if not check_dirs(): raise EnvironmentError
 
     # Physical env
-    os.environ["MAX_PHYS_BATCHSIZE"] = "4096" 
+    os.environ["MAX_PHYS_BATCHSIZE"] = "REPLACE" 
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
     # Requeue behaviour
-    if os.environ.get("SLURM_JOB_ID") is None: raise EnvironmentError()
-    print(os.environ.get('SLURM_RESTART_COUNT', '0')=='0')
-    if os.environ.get('SLURM_RESTART_COUNT', '0') == '0':
-        os.environ["CKPT_ID"] = os.environ.get("SLURM_JOB_ID")
+    signal.signal(signal.SIGTERM, signal_handler)
+    if os.environ.get('SLURM_RESTART_COUNT', '0') != '0':
+        ckpt_files = os.listdir(ckpt_path)
+        n = len(ckpt_files)
+        if n == 1:
+            os.environ["CKPT_ID"] = ckpt_files[0].split('.')[0]
+            print("Found ckpt. Resuming training...")
+        elif n == 0: print("Job restarted, but no ckpt found. Starting from scratch...")
+        elif n > 1: 
+            print(f"Ambiguous ckpts. found {n} files but expected 1. Exiting...")
+            exit(1)
+    
 
     wandb.login()
     wandb.agent(args.sweep_id, function=main, count=1)
