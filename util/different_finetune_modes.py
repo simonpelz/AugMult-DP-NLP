@@ -62,7 +62,7 @@ def model_and_tokenizer(model_name, num_labels):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = AutoConfig.from_pretrained(model_name)
     config.num_labels = num_labels
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, config=config)
+    model = AutoModelForSequenceClassification.from_pretrained(model_name, config=config) # TODO for HoC change problem_type
     model.train()
     return model, tokenizer
 

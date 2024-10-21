@@ -1,21 +1,47 @@
-from calendar import c
 from collections import defaultdict
-from sympy import re
+import os
 import torch
 from torch.utils.data import DataLoader
 from datasets import load_dataset
+
+from util.local_datasets import  LocalTSVDataset
 
 
 def get_dataset(dataset_name,glue=True):
     if glue:
         dataset = load_dataset("glue", dataset_name)
-    else: raise NotImplementedError
+    else:
+        data_dir = os.environ.get("DATASET_DIR")
+        if data_dir is None: raise ValueError("DATASET_DIR environment variable is not set.")
+        train_file = os.path.join(data_dir, 'train.tsv')
+        val_file = os.path.join(data_dir, 'dev.tsv')
+        test_file = os.path.join(data_dir, 'test.tsv')
+        dataset = {
+            'train':  LocalTSVDataset(train_file),
+            'validation':  LocalTSVDataset(val_file),
+            'test':  LocalTSVDataset(test_file)
+        }
+
     return dataset
+
+def tokenize_from_dataset(sample,tokenizer):
+    # Probably very inefficient computation bc in .map, but is done once with small datasets
+    if any(c in sample for c in ["premise","question","sentence2","question2"]):
+        sentence_columns = list(sample.keys())
+        sentence_columns = [c for c in sentence_columns if c != 'label'] # .remove didnt work??
+        tokens = tokenizer(sample[sentence_columns[0]],sample[sentence_columns[1]], max_length=128, padding='max_length', truncation=True)
+    elif "sentence" in sample:
+        if len(sample.keys()-2!=1): raise NotImplementedError # might get false alarms for non glue but better safe than sorry
+        tokens = tokenizer(sample['sentence'], max_length=128, padding='max_length', truncation=True)
+    else:
+        raise NotImplementedError
+    return tokens
 
 
 def non_dp_tokenize_dataloader(dataset,tokenizer,batch_size):
-    tokens = dataset.map(lambda x: tokenizer(x['sentence'], max_length=128, padding='max_length', truncation=True), batched=True)
-    tokens = tokens.remove_columns(['idx','sentence']).rename_column("label", "labels") 
+    if 'idx' in dataset.column_names: dataset = dataset.remove_columns(['idx'])
+    tokens = dataset.map(lambda x: tokenize_from_dataset(x,tokenizer), batched=True)
+    tokens = tokens.rename_column("label", "labels")
     tokens.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
     dataloader = DataLoader(tokens, shuffle=False, batch_size=batch_size)
     return dataloader
@@ -41,8 +67,9 @@ def collate_fn(batch,tokenizer, transform_list,max_length=128):
         'max_length': max_length,'return_tensors': 'pt'
     }
 
+    # TODO awful implementation relies on exact column names, but works for glue
     labels = combined_batch.pop("label") # may raise error but this is only for training!
-    _ = combined_batch.pop("idx", None)
+    _ = combined_batch.pop("idx", None) # some are called index or id
 
     # TODO kinda hacky because column names are not the same
     # fails for additional columns that are not sentences
