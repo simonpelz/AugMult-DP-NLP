@@ -48,7 +48,8 @@ def non_dp_tokenize_dataloader(dataset,tokenizer,batch_size):
     if 'idx' in dataset.column_names: dataset = dataset.remove_columns(['idx'])
     tokens = dataset.map(lambda x: tokenize_from_dataset(x,tokenizer), batched=True)
     tokens = tokens.rename_column("label", "labels")
-    tokens.set_format(type='torch', columns=['input_ids', 'attention_mask', 'labels'])
+    tokens.remove_columns(["sentence1","sentence2","label"])
+    tokens.set_format(type='torch', columns=['input_ids', 'attention_mask','token_type_ids', 'labels'])
     dataloader = DataLoader(tokens, shuffle=False, batch_size=batch_size)
     return dataloader
 
