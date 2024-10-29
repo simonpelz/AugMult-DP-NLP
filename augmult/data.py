@@ -4,10 +4,9 @@ import torch
 from torch.utils.data import DataLoader
 from datasets import load_dataset
 
-from util.local_datasets import  LocalTSVDataset
+from util.local_datasets import  LocalTSVDataset, PrecomputedAugsDataset
 
-
-def get_dataset(dataset_name,glue=True):
+def get_dataset(dataset_name,glue=True,precomputed_augs=False):
     if glue:
         dataset = load_dataset("glue", dataset_name)
     else:
@@ -16,11 +15,18 @@ def get_dataset(dataset_name,glue=True):
         train_file = os.path.join(data_dir, 'train.tsv')
         val_file = os.path.join(data_dir, 'dev.tsv')
         test_file = os.path.join(data_dir, 'test.tsv')
-        dataset = {
-            'train':  LocalTSVDataset(train_file),
-            'validation':  LocalTSVDataset(val_file),
-            'test':  LocalTSVDataset(test_file)
-        }
+        if precomputed_augs:
+            dataset = {
+                'train':  PrecomputedAugsDataset(train_file),
+                'validation':  PrecomputedAugsDataset(val_file),
+                'test':  PrecomputedAugsDataset(test_file)
+            }
+        else:
+            dataset = {
+                'train':  LocalTSVDataset(train_file),
+                'validation':  LocalTSVDataset(val_file),
+                'test':  LocalTSVDataset(test_file)
+            }
 
     return dataset
 
@@ -56,8 +62,46 @@ def unpack_dict_list(list_of_dicts):
     return combined_dict
 
 
-def init_mv_collate(tokenizer, transform_list,max_length=128):
-    return lambda batch: collate_fn(batch,tokenizer, transform_list,max_length)
+def init_mv_collate(tokenizer, transform_list,max_length=128, precomputed=False):
+    if precomputed:
+        return lambda batch: collate_precomputed(batch,tokenizer, transform_list,max_length)
+    else:
+        return lambda batch: collate_fn(batch,tokenizer, transform_list,max_length)
+
+
+def collate_precomputed(batch,tokenizer, transform_list,max_length=128):
+    """ 
+    assumes that there is only labels, original sentences and augmented sentences as columns
+    and string of form X1 and X2 where X is augmentation description for sentence1 and sentence2 (BERT)
+    """
+    combined_batch = unpack_dict_list(batch)
+    tokenize_args = {'padding': 'max_length','truncation': True,
+        'max_length': max_length,'return_tensors': 'pt'
+    }
+    labels = combined_batch.pop("label") # may raise error but this is only for training!
+    augs = set([s[:-1] for s in combined_batch.keys()])
+    assert len(transform_list) == len(augs) # K is defined by length of transformlist butis unused in this case. Pad list match K for fix
+
+    grouped_by_aug = [[] for _ in range(len(augs))] # why is this necessary? it isnt appended to this[x] but overwritten . chatgpt gave it to me
+    for i,aug in enumerate(augs):
+        s1,s2 = combined_batch[(aug+"1")],combined_batch[(aug+"2")]
+        tokenized_pairs = tokenizer(s1,s2,**tokenize_args)
+        grouped_by_aug[i] = tokenized_pairs # is a dict from tokenizer
+
+    combined_aug_groups = unpack_dict_list(grouped_by_aug)
+    
+    stacked_views = defaultdict(list)
+    for key in grouped_by_aug[0].keys():
+        for per_sample_aug in zip(*combined_aug_groups[key]):
+            per_sample_aug = list(per_sample_aug)
+            stacked_views[key].append(torch.stack(per_sample_aug))
+    stacked_views = dict(stacked_views)
+    stacked_views = {k: torch.stack(v) for k, v in stacked_views.items()}
+
+    stacked_views['labels'] = torch.tensor(labels)
+
+    return stacked_views
+                        
 
 def collate_fn(batch,tokenizer, transform_list,max_length=128):
     

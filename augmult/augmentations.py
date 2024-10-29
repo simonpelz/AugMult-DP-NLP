@@ -18,6 +18,7 @@ class Augmentations:
         #if trnslt: os.environ["TOKENIZERS_PARALLELISM"] = "false"
         
         self.unaugmented = flexible_unaugmented
+
         self.synonym_wn = naw.SynonymAug(aug_src='wordnet',name="wordnet_replace").augment
 
         char_param = {'aug_char_p': 0.1,'aug_word_p': 0.2,'include_upper_case': False,'include_numeric': False}
@@ -28,12 +29,12 @@ class Augmentations:
         self.swap_word = naw.RandomWordAug(action="swap",**word_params,name="word_swap").augment
         self.del_word = naw.RandomWordAug(**word_params,name="word_delete").augment
         
-        if trnslt: self.back_translate=naw.BackTranslationAug(device=_get_device(),name="backtranslate",).augment
+        #if trnslt: self.back_translate=naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-zh',to_model_name='Helsinki-NLP/opus-mt-zh-en',device=_get_device(),name="backtranslate",).augment
 
         emb_param = {"top_k": 1,**word_params}
         if bert:
-            self.context_insert = naw.ContextualWordEmbsAug(**emb_param,model_path='bert-base-uncased', action="insert",name="bert_insert").augment
-            self.context_replacement = naw.ContextualWordEmbsAug(**emb_param,model_path='bert-base-uncased', action="substitute",name="bert_replace").augment
+            self.context_insert = naw.ContextualWordEmbsAug(**emb_param,model_path='distilbert-base-uncased', action="insert",name="bert_insert").augment
+            self.context_replacement = naw.ContextualWordEmbsAug(**emb_param,model_path='distilbert-base-uncased', action="substitute",name="bert_replace").augment
         
         if emb:
             p = _load_emb()
@@ -146,27 +147,8 @@ def _get_device():
 
 
 def main():
-    count = 1
     #sentence ="Sometimes to understand a word's meaning you need more than a definition; you need to see the word used in a sentence."
     sentence = """When you've got snow, it's really hard to learn a snow sport so we looked at all the different ways I could mimic being on snow without actually being on snow."""
-    
-    for t in get_transforms_from_str("eda5"):
-        if hasattr(t,"__self__"): print(f"\n{(t.__self__.name)}")
-        for _ in range(count):
-            print(t(sentence)[0])
-
-
-    s = a.single_aug
-    all_augs_separately = [s(a.unaugmented),s(a.context_replacement),s(a.context_insert),s(a.typo),
-                          s(a.del_word),s(a.swap_char),s(a.swap_word),s(a.emb_insert),s(a.emb_replace)]#,s(a.back_translate)
-    all_augs_separately = [s(a.synonym_wn),s(a.emb_replace),s(a.glove_replace)]#,s(a.context_replacement)]
-
-    print(sentence)
-    for t_list in all_augs_separately:
-        t = t_list[1]
-        print(f"\n{(t.__self__.name )}")
-        for _ in range(count):
-            print(t(sentence)[0])
 
 
 if __name__ == "__main__":
