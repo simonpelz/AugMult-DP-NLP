@@ -49,7 +49,8 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
     optimizer = optim.SGD(model.parameters(), lr=lr)
 
     # Dataloaders
-    dataset = get_dataset(dataset_name, glue = glue)
+    precomputed = None in transform_list
+    dataset = get_dataset(dataset_name, glue = glue, precomputed_augs=precomputed)
     mv_train_loader = dp_dataloader(dataset["train"],dataset_size,tokenizer,transform_list,batch_size)
     valid_loader = non_dp_tokenize_dataloader(dataset['validation'], tokenizer, max_phys_batchsize)
 
@@ -57,7 +58,7 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
     if epochs is None:
         if total_steps is None: raise ValueError
         epochs = -(total_steps// -steps_per_epoch)
-        early_stop_patience = max(4,(epochs//3))
+        early_stop_patience = 1000 #max(5,(epochs//2))
 
     # Logging
     n_samples = len(mv_train_loader.dataset)
@@ -96,7 +97,7 @@ def run(dataset_name, transform_list, K, epochs, batch_size, lr, max_grad_norm, 
     wandb.config.update({"noise_multiplier": dp_optimizer.noise_multiplier})
 
     # Override the empty batch shapes provided by privacy engine
-    mv_collate = init_mv_collate(tokenizer,transform_list,max_length=128)
+    mv_collate = init_mv_collate(tokenizer,transform_list,max_length=128,precomputed=precomputed)
     empty_batch_handling(mv_train_loader=mv_train_loader,dp_train_loader=dp_train_loader,mv_collate=mv_collate)
 
     # Custom Grad Samplers

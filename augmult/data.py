@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 from datasets import load_dataset
 
-from util.local_datasets import  LocalTSVDataset, PrecomputedAugsDataset
+from util.local_datasets import  LocalTSVDataset, PrecomputedAugsDataset, ZHPrecomputedAugsDataset
 
 def get_dataset(dataset_name,glue=True,precomputed_augs=False):
     if glue:
@@ -16,11 +16,15 @@ def get_dataset(dataset_name,glue=True,precomputed_augs=False):
         val_file = os.path.join(data_dir, 'dev.tsv')
         test_file = os.path.join(data_dir, 'test.tsv')
         if precomputed_augs:
+
+            train_file = os.path.join(data_dir, 'train_precomputed_zh.tsv')
+
             dataset = {
-                'train':  PrecomputedAugsDataset(train_file),
-                'validation':  PrecomputedAugsDataset(val_file),
-                'test':  PrecomputedAugsDataset(test_file)
+                'train':        ZHPrecomputedAugsDataset(train_file),
+                'validation':   LocalTSVDataset(val_file),
+                'test':         LocalTSVDataset(test_file)
             }
+
         else:
             dataset = {
                 'train':  LocalTSVDataset(train_file),
@@ -54,7 +58,8 @@ def non_dp_tokenize_dataloader(dataset,tokenizer,batch_size):
     return dataloader
 
 
-def unpack_dict_list(list_of_dicts):    
+def unpack_dict_list(list_of_dicts):  
+    # unpack a list of dicts with same keys into a single dict with a list of each of the values  
     combined_dict = defaultdict(list)
     for d in list_of_dicts:
         for key, value in d.items():
@@ -75,26 +80,56 @@ def collate_precomputed(batch,tokenizer, transform_list,max_length=128):
     assumes that there is only labels, original sentences and augmented sentences as columns
     and string of form X1 and X2 where X is augmentation description for sentence1 and sentence2 (BERT)
     """
+
+    # transformlist will contain augs and then pad the rest with n_augs*n_precomputed
+    # eg. for *one* precomputed backtranslate: [unaugmented,synonym,swap, None,None,None] (n=3 "None"s for every precomp.)
+    
+    # eliminate Nones
+    multiply_by_following_augs = [aug for aug in transform_list if aug]
+    assert len(multiply_by_following_augs) > 0 # at least put [unaugmented,...None]
+
+    #bundle separate dicts into one
     combined_batch = unpack_dict_list(batch)
     tokenize_args = {'padding': 'max_length','truncation': True,
         'max_length': max_length,'return_tensors': 'pt'
     }
     labels = combined_batch.pop("label") # may raise error but this is only for training!
-    augs = set([s[:-1] for s in combined_batch.keys()])
-    assert len(transform_list) == len(augs) # K is defined by length of transformlist butis unused in this case. Pad list match K for fix
 
-    grouped_by_aug = [[] for _ in range(len(augs))] # why is this necessary? it isnt appended to this[x] but overwritten . chatgpt gave it to me
-    for i,aug in enumerate(augs):
+    # get precomputed aug names
+    augs = set([s[:-1] for s in combined_batch.keys()]) # of form sentence1 sentence2 zh1 zh2 etc
+    assert len(transform_list) == (len(multiply_by_following_augs)*len(augs)) # K is defined by length of transformlist butis unused in this case. Pad list match K for fix
+    # load precomputed
+    base_aug_sentence_pairs=[]
+    for aug in augs:
         s1,s2 = combined_batch[(aug+"1")],combined_batch[(aug+"2")]
-        tokenized_pairs = tokenizer(s1,s2,**tokenize_args)
-        grouped_by_aug[i] = tokenized_pairs # is a dict from tokenizer
+        base_aug_sentence_pairs.append([s1,s2])
 
+    # augment and group by aug
+    grouped_by_aug = []
+    for multiply_aug in multiply_by_following_augs:
+        # transform all precomputed
+        for [s1,s2] in base_aug_sentence_pairs:
+            #augment
+            aug_s1= multiply_aug(list(s1))
+            aug_s2= multiply_aug(list(s2))
+
+            #tokenize
+            tokenized_pairs = tokenizer(aug_s1,aug_s2,**tokenize_args) # is a dict from tokenizer
+            # group all aug combinations separately
+            grouped_by_aug.append(tokenized_pairs) 
+    
+    # convert to (token, mask etc.) shape to: [K, B, seq_len]
+    # result is dict with {"input_ids":[[B,seq_len] x K ...],"atmask":[[B,seq_len] x K ...], etc.}
+    # we want: {"input_ids":[B, K, seq_len],etc.} (test example: (11,2,128))
     combined_aug_groups = unpack_dict_list(grouped_by_aug)
     
     stacked_views = defaultdict(list)
+    # for each column from the tokenizer like "input_ids"
     for key in grouped_by_aug[0].keys():
+        # group per sample (all augmented versions of that sample)
         for per_sample_aug in zip(*combined_aug_groups[key]):
             per_sample_aug = list(per_sample_aug)
+            # and stack them into a new dict
             stacked_views[key].append(torch.stack(per_sample_aug))
     stacked_views = dict(stacked_views)
     stacked_views = {k: torch.stack(v) for k, v in stacked_views.items()}
@@ -140,10 +175,14 @@ def collate_fn(batch,tokenizer, transform_list,max_length=128):
     combined_aug_groups = unpack_dict_list(grouped_by_aug)
 
     stacked_views = defaultdict(list)
+    # for each column from the tokenizer like "input_ids"
     for key in grouped_by_aug[0].keys():
+        # group per sample (all augmented versions of that sample)
         for per_sample_aug in zip(*combined_aug_groups[key]):
             per_sample_aug = list(per_sample_aug)
+            # and stack them into a new dict
             stacked_views[key].append(torch.stack(per_sample_aug))
+
     stacked_views = dict(stacked_views)
     stacked_views = {k: torch.stack(v) for k, v in stacked_views.items()}
 

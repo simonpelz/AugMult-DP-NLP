@@ -38,8 +38,8 @@ class Augmentations:
         
         if emb:
             p = _load_emb()
-            self.glove_replace = naw.WordEmbsAug(**emb_param, model_path=p["glove"] ,model_type='glove',action="substitute",name="glove_replace").augment
-            self.glove_insert = naw.WordEmbsAug(**emb_param, model_path=p["glove"], model_type='glove',action="insert",name="glove_insert").augment
+            #self.glove_replace = naw.WordEmbsAug(**emb_param, model_path=p["glove"] ,model_type='glove',action="substitute",name="glove_replace").augment
+            #self.glove_insert = naw.WordEmbsAug(**emb_param, model_path=p["glove"], model_type='glove',action="insert",name="glove_insert").augment
             self.emb_replace = naw.WordEmbsAug(**emb_param, model_path=p["word2vec"] ,model_type='word2vec',action="substitute",name="w2v_replace").augment
             self.emb_insert = naw.WordEmbsAug(**emb_param, model_path=p["word2vec"], model_type='word2vec',action="insert",name="w2v_insert").augment
 
@@ -62,10 +62,10 @@ class Augmentations:
         if K not in (5,9,13,17):
             raise ValueError("EDA has 4 augmentations, so K should be 1+4X")
         transformation_list = [self.unaugmented,
-                               self.synonym_wn, self.emb_insert, self.swap_word, self.del_word, #K=5
-                               self.glove_replace, self.glove_insert, self.swap_word, self.del_word, #K=9
-                               self.emb_replace, self.emb_insert, self.swap_word, self.del_word, #K=13
-                               self.context_replacement, self.context_insert, self.swap_word, self.del_word] #K=17
+                               self.synonym_wn, self.emb_insert, self.swap_word, self.del_word,] #K=5
+                               #self.glove_replace, self.glove_insert, self.swap_word, self.del_word, #K=9
+                               #self.emb_replace, self.emb_insert, self.swap_word, self.del_word, #K=13
+                               #self.context_replacement, self.context_insert, self.swap_word, self.del_word] #K=17
         return transformation_list[:K]
     
     def eda_changed(self,extended=False):
@@ -108,22 +108,34 @@ class Augmentations:
 def get_transforms_from_str(transform_name):
     if transform_name is None:
         return [lambda x: x]
-    elif transform_name == "eda_bert":
-        transform_list = Augmentations(trnslt=False,emb=False).eda_bert()
-    elif transform_name in ["eda_no_delete4"]:
-        transform_list = Augmentations(trnslt=False,emb=True).eda_changed()
-    elif transform_name in ["eda5","eda9","eda13","eda17"]:
-        k = int(transform_name[3:])
-        transform_list = Augmentations(trnslt=False).eda(k)
-    elif transform_name == "cola":
-        transform_list = Augmentations(trnslt=False,bert=False).cola()
+    elif "precomputed" in transform_name:
+        # of form eg: precomputed_2x3
+        amounts = transform_name.split("_")[-1].split("x")
+        precomp,aug = int(amounts[0]),int(amounts[1])
+        if aug == 1: transform_list = [lambda x: x]
+        elif aug == 2: 
+            a = Augmentations(trnslt=False,bert=False,emb=False)
+            transform_list = [a.unaugmented,a.swap_word]
+        elif aug == 3:
+            a = Augmentations(trnslt=False,bert=False,emb=False)
+            transform_list = [a.unaugmented,a.synonym_wn,a.swap_word]
+        else: raise NotImplementedError
+        for i in range(precomp-1): 
+            for j in range(aug):
+                transform_list.append(None)
+        assert len(transform_list) == precomp*aug
+        return transform_list
+
+
+    elif transform_name == "eda5":
+        transform_list = Augmentations(trnslt=False,bert=False).eda(5)
     else:
         raise NotImplementedError # TODO add support for other augs, and maybe list constructor from string eg. "un_typ_syn_emb_del" -> [...]
     return transform_list
 
 
 def _load_emb():
-    _model_dir = os.environ.get("MODEL_DIR", './augmentation_models/')
+    _model_dir = os.environ.get("MODEL_DIR")
 
     if not os.path.exists(_model_dir):
         os.makedirs(_model_dir)
@@ -132,12 +144,12 @@ def _load_emb():
     if not os.path.isfile(w2vec_path):
         DownloadUtil.download_word2vec(dest_dir=_model_dir) # Download word2vec model
 
-    glove_path = os.path.abspath(_model_dir+'glove.6B.300d.txt')
-    if not os.path.isfile(glove_path):
-        DownloadUtil.download_glove(model_name='glove.6B', dest_dir=_model_dir) # Download GloVe model
+    #glove_path = os.path.abspath(_model_dir+'glove.6B.300d.txt')
+    #if not os.path.isfile(glove_path):
+    #    DownloadUtil.download_glove(model_name='glove.6B', dest_dir=_model_dir) # Download GloVe model
 
     #DownloadUtil.download_fasttext(model_name='wiki-news-300d-1M', dest_dir=MODEL_DIR) # Download fasttext model
-    paths = {"word2vec": w2vec_path, "glove":glove_path}
+    paths = {"word2vec": w2vec_path,} #"glove":glove_path}
     return paths
 
 

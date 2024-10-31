@@ -5,9 +5,10 @@ from util.different_finetune_modes import get_param_setter_from_str
 
 import os
 
-PROJECT_NAME = "sst2"
-DATASET = "sst2"
-NUM_LABELS = 2
+PROJECT_NAME = "mednli"
+DATASET = "mednli"
+GLUE = False
+NUM_LABELS = 3
 
 
 def main():
@@ -34,29 +35,29 @@ def objective(config):
 
 
 sweep_configuration = {
-    "method": "random",
+    "method": "grid",
     "metric": {"goal": "maximize", "name": "valid_metric"},
     "parameters": {
 
-        "total_steps": {"value": 800},
+        "total_steps": {"value": 1500},
 
-        "batch_size": {"values":[256,512,1024,2048]},
+        "batch_size": {"value": 512},
 
-        "lr": {"values":[0.5,1,2]},
-
-        "max_grad_norm": {"value":1},
+        "lr": {"value": 133.33},
+        # TODO comment out noise modifier
+        "max_grad_norm": {"value":0.0075},
         "transform_name": {"value": None},
 
         "target_epsilon": {"value": 8},   
 
         "dataset_size": {"value": None},   
-        "save_model": {"value": "sst2_e8_k0"},   
+        "save_model": {"value": "sanitycheckimpl"},
         
         # Static
         "dataset_name": {"value": DATASET},   
         "num_labels": {"value": NUM_LABELS},   
         "model_name": {"value": "bert-base-uncased"},   
-        "glue": {"value": True},   
+        "glue": {"value": GLUE},   
         #"logs_per_epoch": {"value": 10},   
         #"max_phys_batchsize": {"value": 4096}   
         #"noise_multiplier": {"value": None},   
