@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 from datasets import load_dataset
 
-from util.local_datasets import  LocalTSVDataset, PrecomputedAugsDataset, ZHPrecomputedAugsDataset
+from util.local_datasets import  LocalTSVDataset, PrecomputedAugsDataset
 
 def get_dataset(dataset_name,glue=True,precomputed_augs=False):
     if glue:
@@ -17,10 +17,10 @@ def get_dataset(dataset_name,glue=True,precomputed_augs=False):
         test_file = os.path.join(data_dir, 'test.tsv')
         if precomputed_augs:
 
-            train_file = os.path.join(data_dir, 'train_precomputed_zh.tsv')
+            train_file = os.path.join(data_dir, 'train_precomputed.tsv')
 
             dataset = {
-                'train':        ZHPrecomputedAugsDataset(train_file),
+                'train':        PrecomputedAugsDataset(train_file),
                 'validation':   LocalTSVDataset(val_file),
                 'test':         LocalTSVDataset(test_file)
             }
@@ -96,11 +96,11 @@ def collate_precomputed(batch,tokenizer, transform_list,max_length=128):
     labels = combined_batch.pop("label") # may raise error but this is only for training!
 
     # get precomputed aug names
-    augs = set([s[:-1] for s in combined_batch.keys()]) # of form sentence1 sentence2 zh1 zh2 etc
-    assert len(transform_list) == (len(multiply_by_following_augs)*len(augs)) # K is defined by length of transformlist butis unused in this case. Pad list match K for fix
+    precomp_augs = set([s[:-1] for s in combined_batch.keys()]) # of form sentence1 sentence2 zh1 zh2 etc
+    assert len(transform_list) == (len(multiply_by_following_augs)*len(precomp_augs)) # K is defined by length of transformlist butis unused in this case. Pad list match K for fix
     # load precomputed
     base_aug_sentence_pairs=[]
-    for aug in augs:
+    for aug in precomp_augs:
         s1,s2 = combined_batch[(aug+"1")],combined_batch[(aug+"2")]
         base_aug_sentence_pairs.append([s1,s2])
 

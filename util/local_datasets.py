@@ -97,7 +97,7 @@ class LocalTSVDataset(AbstractDataset):
     def _get_column_names(self):
         return ['sentence1', 'sentence2', 'label']
 
-class PrecomputedAugsDataset(AbstractDataset):
+class K5PrecomputedAugsDataset(AbstractDataset):
     def __init__(self, tsv_file):
         self.tsv_file = tsv_file
         super().__init__()
@@ -126,7 +126,7 @@ class PrecomputedAugsDataset(AbstractDataset):
     def _get_column_names(self):
         return ['sentence1', 'sentence2', 'label', 'zh1','zh2','de1','de2','ru1','ru2','ar1','ar2',]
 
-class ZHPrecomputedAugsDataset(AbstractDataset):
+class PrecomputedAugsDataset(AbstractDataset):
     def __init__(self, tsv_file):
         self.tsv_file = tsv_file
         super().__init__()
@@ -143,11 +143,39 @@ class ZHPrecomputedAugsDataset(AbstractDataset):
 
                     'zh1': row['zh1'],
                     'zh2': row['zh2'],
+                    'de1': row['de1'],
+                    'de2': row['de2'],
+                    'ru1': row['ru1'],
+                    'ru2': row['ru2'],
+                    'ar1': row['ar1'],
+                    'ar2': row['ar2'],
+                    'af1': row['af1'],
+                    'af2': row['af2'],
+                    'fr1': row['fr1'],
+                    'fr2': row['fr2'],
+                    'es1': row['es1'],
+                    'es2': row['es2'],
+                    'id1': row['id1'],
+                    'id2': row['id2'],
+                    'it1': row['it1'],
+                    'it2': row['it2'],
+                    'nl1': row['nl1'],
+                    'nl2': row['nl2'],
+                    'fi1': row['fi1'],
+                    'fi2': row['fi2'],
                 })
         return samples
 
     def _get_column_names(self):
-        return ['sentence1', 'sentence2', 'label', 'zh1','zh2',]
+        return ['label','sentence1', 'sentence2', 'zh1','zh2','de1','de2','ru1','ru2','ar1','ar2',
+                             'af1','af2',
+                             'fr1','fr2',
+                             'es1','es2',
+                             'id1','id2',
+                             'it1','it2',
+                             'nl1','nl2',
+                             'fi1','fi2',]
+
 
 
 #-------------------------------------------------------------------------------------
@@ -169,32 +197,34 @@ def main(fromfile,tofile,progressfile):
     last_completed_line = get_last_completed_line(progressfile)
     start_line = last_completed_line + 1
 
-    print("start loading translation models: ", end="")
+    print("start loading translation models: ")#, end="")
     import nlpaug.augmenter.word as naw
 
-    #bt_aug_zh = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-zh',to_model_name='Helsinki-NLP/opus-mt-zh-en',device="cpu",name="zh",).augment
-    #print("first done | ", end="")
-    bt_aug_de = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-de',to_model_name='Helsinki-NLP/opus-mt-de-en',device="cpu",name="de",).augment
-    print("second done | ", end="")
-    bt_aug_ru = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-ru',to_model_name='Helsinki-NLP/opus-mt-ru-en',device="cpu",name="ru",).augment
-    print("third done | ", end="")
-    bt_aug_ar = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-ar',to_model_name='Helsinki-NLP/opus-mt-ar-en',device="cpu",name="ar",).augment
-    print("fourth done\nfinished loading models")
+    bt_aug_af = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-af',to_model_name='Helsinki-NLP/opus-mt-af-en',device="cuda",name="af",).augment
+    bt_aug_fr = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-fr',to_model_name='Helsinki-NLP/opus-mt-fr-en',device="cuda",name="fr",).augment
+    bt_aug_es = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-es',to_model_name='Helsinki-NLP/opus-mt-es-en',device="cuda",name="es",).augment
+    bt_aug_id = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-id',to_model_name='Helsinki-NLP/opus-mt-id-en',device="cuda",name="id",).augment
+    bt_aug_it = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-it',to_model_name='Helsinki-NLP/opus-mt-it-en',device="cuda",name="it",).augment
+    bt_aug_nl = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-nl',to_model_name='Helsinki-NLP/opus-mt-nl-en',device="cuda",name="nl",).augment
+    bt_aug_fi = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-fi',to_model_name='Helsinki-NLP/opus-mt-fi-en',device="cuda",name="fi",).augment
+
+    print("\nfinished loading models")
 
     with open(fromfile, 'r', encoding='utf8') as fin, open(tofile, 'a', encoding='utf8') as fout:
         
-        def signal_handler(signum, frame):
-            print("REQUEUEING - saving progress and exiting.")
-            raise Exception
-
-        signal.signal(signal.SIGTERM, signal_handler)
-
         reader = csv.DictReader(fin, delimiter='\t')
         writer = csv.writer(fout, delimiter='\t', lineterminator='\n')
 
         # Write header only if file is empty
         if os.path.getsize(tofile) == 0:
-            writer.writerow(['label','sentence1', 'sentence2', 'zh1','zh2','de1','de2','ru1','ru2','ar1','ar2',])
+            writer.writerow(['label','sentence1', 'sentence2', 'zh1','zh2','de1','de2','ru1','ru2','ar1','ar2',
+                             'af1','af2',
+                             'fr1','fr2',
+                             'es1','es2',
+                             'id1','id2',
+                             'it1','it2',
+                             'nl1','nl2',
+                             'fi1','fi2',])
 
         # Skip previously completed lines
         for _ in range(last_completed_line):
@@ -203,15 +233,45 @@ def main(fromfile,tofile,progressfile):
         print("Writing to file...")
         for line_num, row in enumerate(tqdm.tqdm(reader), start=start_line):
             try:
-                #zh1 = bt_aug_zh(row['sentence1'])[0]
-                #zh2 = bt_aug_zh(row['sentence2'])[0]
-                de1 = bt_aug_de(row['sentence1'])[0]
-                de2 = bt_aug_de(row['sentence2'])[0]
-                ru1 = bt_aug_ru(row['sentence1'])[0]
-                ru2 = bt_aug_ru(row['sentence2'])[0]
-                ar1 = bt_aug_ar(row['sentence1'])[0]
-                ar2 = bt_aug_ar(row['sentence2'])[0]
-                writer.writerow([row['label'],row['sentence1'],row['sentence2'],row['zh1'],row['zh2'],de1,de2,ru1,ru2,ar1,ar2,])
+                af1 = bt_aug_af(row['sentence1'])[0]
+                af2 = bt_aug_af(row['sentence2'])[0]
+                fr1 = bt_aug_fr(row['sentence1'])[0]
+                fr2 = bt_aug_fr(row['sentence2'])[0]
+                es1 = bt_aug_es(row['sentence1'])[0]
+                es2 = bt_aug_es(row['sentence2'])[0]
+                id1 = bt_aug_id(row['sentence1'])[0]
+                id2 = bt_aug_id(row['sentence2'])[0]
+                it1 = bt_aug_it(row['sentence1'])[0]
+                it2 = bt_aug_it(row['sentence2'])[0]
+                nl1 = bt_aug_nl(row['sentence1'])[0]
+                nl2 = bt_aug_nl(row['sentence2'])[0]
+                fi1 = bt_aug_fi(row['sentence1'])[0]
+                fi2 = bt_aug_fi(row['sentence2'])[0]
+
+                writer.writerow([row['label'],row['sentence1'],row['sentence2'],
+                                 row['zh1'],
+                                 row['zh2'],
+                                 row['de1'],
+                                 row['de2'],
+                                 row['ru1'],
+                                 row['ru2'],
+                                 row['ar1'],
+                                 row['ar2'],
+                                af1,
+                                af2,
+                                fr1,
+                                fr2,
+                                es1,
+                                es2,
+                                id1,
+                                id2,
+                                it1,
+                                it2,
+                                nl1,
+                                nl2,
+                                fi1,
+                                fi2,
+                                 ])
                 
                 # Flush and sync to ensure the line is committed to disk
                 fout.flush()
@@ -224,36 +284,18 @@ def main(fromfile,tofile,progressfile):
                 print(f"Error at line {line_num}: {e}")
                 break  # Handle error, can retry on next run
 
-                
-        """               
-        # index	genre	filename	year	old_index	source1	source2	sentence1	sentence2	score
-        samples.append({
-            'sentence1': row['sentence1'],
-            'sentence2': row['sentence2'],
-            'score': float(row['score']),
 
-            'zh1': row['zh1'],
-            'zh2': row['zh2'],
-            'de1': row['de1'],
-            'de2': row['de2'],
-            'ru1': row['ru1'],
-            'ru2': row['ru2'],
-            'ar1': row['ar1'],
-            'ar2': row['ar2'],
-        })"""
-
-
-def create_biosses(input_dir, output_dir):
+def precompute(input_dir, output_dir):
     print("start resolving path")
     src_dir = Path(input_dir)
     output_dir = Path(output_dir)
     if not os.path.exists(output_dir): os.mkdir(output_dir)
-    for src_name, dst_name in zip(['train_precomputed_zh.tsv',], #'dev.tsv', 'test.tsv'],
-                                  ['train_precomputed_5.tsv',]): #'dev.tsv', 'test.tsv']):
+    for src_name, dst_name in zip(['train_precomputed.tsv',], #'dev.tsv', 'test.tsv'],
+                                  ['train_precomputed_12.tsv',]): #'dev.tsv', 'test.tsv']):
         source = src_dir / src_name
         dest = output_dir / dst_name
-        progressfile = output_dir / 'last_processed_line_5.txt'
+        progressfile = output_dir / 'last_processed_line_12.txt'
         main(source, dest,progressfile)
 
 if __name__ == "__main__":
-    create_biosses("/vol/aimspace/projects/physionet/mednli/processed","/vol/aimspace/projects/physionet/mednli/processed")
+    precompute("/home/spelz/AugMult_DP_NLP/datasets/processed","/home/spelz/AugMult_DP_NLP/datasets/processed")

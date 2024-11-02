@@ -9,9 +9,13 @@ __pycache__/
 
 # Large files
 ckpts/
+datasets/
 augmentation_models/
 # Analytics
 wandb/
+
+# machine specific
+execute_sweep_local.py
 
 # Distribution / packaging
 .Python
