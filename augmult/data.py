@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 from datasets import load_dataset
 
-from util.local_datasets import  LocalTSVDataset, PrecomputedAugsDataset
+from util.local_datasets import  LocalHoCDataset, LocalTSVDataset, PrecomputedAugsDataset
 
 def get_dataset(dataset_name,glue=True,precomputed_augs=False):
     if glue:
@@ -15,23 +15,29 @@ def get_dataset(dataset_name,glue=True,precomputed_augs=False):
         train_file = os.path.join(data_dir, 'train.tsv')
         val_file = os.path.join(data_dir, 'dev.tsv')
         test_file = os.path.join(data_dir, 'test.tsv')
-        if precomputed_augs:
+        if dataset_name == "mednli":
+            if precomputed_augs:
+                train_file = os.path.join(data_dir, 'train_precomputed_16.tsv')
 
-            train_file = os.path.join(data_dir, 'train_precomputed.tsv')
+                dataset = {
+                    'train':        PrecomputedAugsDataset(train_file),
+                    'validation':   LocalTSVDataset(val_file),
+                    'test':         LocalTSVDataset(test_file)
+                }
 
+            else:
+                dataset = {
+                    'train':  LocalTSVDataset(train_file),
+                    'validation':  LocalTSVDataset(val_file),
+                    'test':  LocalTSVDataset(test_file)
+                }
+        if dataset_name == "hoc":
             dataset = {
-                'train':        PrecomputedAugsDataset(train_file),
-                'validation':   LocalTSVDataset(val_file),
-                'test':         LocalTSVDataset(test_file)
-            }
-
-        else:
-            dataset = {
-                'train':  LocalTSVDataset(train_file),
-                'validation':  LocalTSVDataset(val_file),
-                'test':  LocalTSVDataset(test_file)
-            }
-
+                    'train':        LocalHoCDataset(train_file),
+                    'validation':   LocalHoCDataset(val_file),
+                    'test':         LocalHoCDataset(test_file)
+                }
+        else: raise NotImplementedError
     return dataset
 
 def tokenize_from_dataset(sample,tokenizer):
@@ -41,7 +47,7 @@ def tokenize_from_dataset(sample,tokenizer):
         sentence_columns = [c for c in sentence_columns if c != 'label'] # .remove didnt work??
         tokens = tokenizer(sample[sentence_columns[0]],sample[sentence_columns[1]], max_length=128, padding='max_length', truncation=True)
     elif "sentence" in sample:
-        if len(sample.keys()-2!=1): raise NotImplementedError # might get false alarms for non glue but better safe than sorry
+        if (len(sample.keys())-1!=1): raise NotImplementedError # might get false alarms for non glue but better safe than sorry
         tokens = tokenizer(sample['sentence'], max_length=128, padding='max_length', truncation=True)
     else:
         raise NotImplementedError
@@ -52,7 +58,8 @@ def non_dp_tokenize_dataloader(dataset,tokenizer,batch_size):
     if 'idx' in dataset.column_names: dataset = dataset.remove_columns(['idx'])
     tokens = dataset.map(lambda x: tokenize_from_dataset(x,tokenizer), batched=True)
     tokens = tokens.rename_column("label", "labels")
-    tokens.remove_columns(["sentence1","sentence2","label"])
+    for col in ["sentence1","sentence2","label","sentence"]: 
+        if col in tokens.column_names: tokens.remove_columns([col])
     tokens.set_format(type='torch', columns=['input_ids', 'attention_mask','token_type_ids', 'labels'])
     dataloader = DataLoader(tokens, shuffle=False, batch_size=batch_size)
     return dataloader

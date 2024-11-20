@@ -96,6 +96,35 @@ class LocalTSVDataset(AbstractDataset):
 
     def _get_column_names(self):
         return ['sentence1', 'sentence2', 'label']
+    
+def processHocLabel(label_str):
+    result_label = []
+    for i,index_value in enumerate(label_str.split(',')):
+        [index,value] = index_value.split('_')
+        assert i == int(index) # sanity check if dataset is correct
+        result_label.append(int(value))
+    return result_label
+
+class LocalHoCDataset(AbstractDataset):
+    def __init__(self, tsv_file):
+        self.tsv_file = tsv_file
+        super().__init__()
+
+    def _load_data(self):
+        samples = []
+        with open(self.tsv_file, 'r', encoding='utf8') as file:
+            reader = csv.DictReader(file, delimiter='\t')
+            for row in reader:
+                samples.append({
+                    'sentence': row['sentence'],
+                    'label': processHocLabel(row['labels']),
+                })
+        return samples
+    
+
+    def _get_column_names(self):
+        return ['sentence', 'label']
+
 
 class K5PrecomputedAugsDataset(AbstractDataset):
     def __init__(self, tsv_file):
@@ -163,6 +192,14 @@ class PrecomputedAugsDataset(AbstractDataset):
                     'nl2': row['nl2'],
                     'fi1': row['fi1'],
                     'fi2': row['fi2'],
+                    'bo1': row['bert_insert_og_1'],
+                    'bo2': row['bert_insert_og_2'],
+                    'bz1': row['bert_insert_zh_1'],
+                    'bz2': row['bert_insert_zh_2'],
+                    'bd1': row['bert_replac_de_1'],
+                    'bd2': row['bert_replac_de_2'],
+                    'br1': row['bert_replac_ru_1'],
+                    'br2': row['bert_replac_ru_2'],
                 })
         return samples
 
@@ -174,7 +211,12 @@ class PrecomputedAugsDataset(AbstractDataset):
                              'id1','id2',
                              'it1','it2',
                              'nl1','nl2',
-                             'fi1','fi2',]
+                             'fi1','fi2',
+                             'bo1','bo2',
+                             'bz1','bz2',
+                             'bd1','bd2',
+                             'br1','br2',
+                             ]
 
 
 
@@ -200,6 +242,7 @@ def main(fromfile,tofile,progressfile):
     print("start loading translation models: ")#, end="")
     import nlpaug.augmenter.word as naw
 
+    """
     bt_aug_af = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-af',to_model_name='Helsinki-NLP/opus-mt-af-en',device="cuda",name="af",).augment
     bt_aug_fr = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-fr',to_model_name='Helsinki-NLP/opus-mt-fr-en',device="cuda",name="fr",).augment
     bt_aug_es = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-es',to_model_name='Helsinki-NLP/opus-mt-es-en',device="cuda",name="es",).augment
@@ -207,7 +250,11 @@ def main(fromfile,tofile,progressfile):
     bt_aug_it = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-it',to_model_name='Helsinki-NLP/opus-mt-it-en',device="cuda",name="it",).augment
     bt_aug_nl = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-nl',to_model_name='Helsinki-NLP/opus-mt-nl-en',device="cuda",name="nl",).augment
     bt_aug_fi = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-fi',to_model_name='Helsinki-NLP/opus-mt-fi-en',device="cuda",name="fi",).augment
-
+    """
+    word_params = {"aug_p":0.1,"aug_max":15,}
+    emb_param = {"top_k": 5,**word_params,"model_path":'bionlp/bluebert_pubmed_uncased_L-12_H-768_A-12',"device":"cuda"}
+    med_insert = naw.ContextualWordEmbsAug(**emb_param, action="insert",name="bert_insert").augment
+    med_replac = naw.ContextualWordEmbsAug(**emb_param, action="substitute",name="bert_replace").augment
     print("\nfinished loading models")
 
     with open(fromfile, 'r', encoding='utf8') as fin, open(tofile, 'a', encoding='utf8') as fout:
@@ -224,7 +271,12 @@ def main(fromfile,tofile,progressfile):
                              'id1','id2',
                              'it1','it2',
                              'nl1','nl2',
-                             'fi1','fi2',])
+                             'fi1','fi2',
+                             'bert_insert_og_1','bert_insert_og_2',
+                             'bert_insert_zh_1','bert_insert_zh_2',
+                             'bert_replac_de_1','bert_replac_de_2',
+                             'bert_replac_ru_1','bert_replac_ru_2',
+                             ])
 
         # Skip previously completed lines
         for _ in range(last_completed_line):
@@ -233,20 +285,15 @@ def main(fromfile,tofile,progressfile):
         print("Writing to file...")
         for line_num, row in enumerate(tqdm.tqdm(reader), start=start_line):
             try:
-                af1 = bt_aug_af(row['sentence1'])[0]
-                af2 = bt_aug_af(row['sentence2'])[0]
-                fr1 = bt_aug_fr(row['sentence1'])[0]
-                fr2 = bt_aug_fr(row['sentence2'])[0]
-                es1 = bt_aug_es(row['sentence1'])[0]
-                es2 = bt_aug_es(row['sentence2'])[0]
-                id1 = bt_aug_id(row['sentence1'])[0]
-                id2 = bt_aug_id(row['sentence2'])[0]
-                it1 = bt_aug_it(row['sentence1'])[0]
-                it2 = bt_aug_it(row['sentence2'])[0]
-                nl1 = bt_aug_nl(row['sentence1'])[0]
-                nl2 = bt_aug_nl(row['sentence2'])[0]
-                fi1 = bt_aug_fi(row['sentence1'])[0]
-                fi2 = bt_aug_fi(row['sentence2'])[0]
+                bert_insert_og_1 = med_insert(row['sentence1'])[0]
+                bert_insert_og_2 = med_insert(row['sentence2'])[0]
+                bert_insert_zh_1 = med_insert(row['sentence1'])[0]
+                bert_insert_zh_2 = med_insert(row['sentence2'])[0]
+                bert_replac_de_1 = med_replac(row['sentence1'])[0]
+                bert_replac_de_2 = med_replac(row['sentence2'])[0]
+                bert_replac_ru_1 = med_replac(row['sentence1'])[0]
+                bert_replac_ru_2 = med_replac(row['sentence2'])[0]
+                
 
                 writer.writerow([row['label'],row['sentence1'],row['sentence2'],
                                  row['zh1'],
@@ -257,20 +304,28 @@ def main(fromfile,tofile,progressfile):
                                  row['ru2'],
                                  row['ar1'],
                                  row['ar2'],
-                                af1,
-                                af2,
-                                fr1,
-                                fr2,
-                                es1,
-                                es2,
-                                id1,
-                                id2,
-                                it1,
-                                it2,
-                                nl1,
-                                nl2,
-                                fi1,
-                                fi2,
+                                 row['af1'],
+                                 row['af2'],
+                                 row['fr1'],
+                                 row['fr2'],
+                                 row['es1'],
+                                 row['es2'],
+                                 row['id1'],
+                                 row['id2'],
+                                 row['it1'],
+                                 row['it2'],
+                                 row['nl1'],
+                                 row['nl2'],
+                                 row['fi1'],
+                                 row['fi2'],
+                                 bert_insert_og_1,
+                                 bert_insert_og_2,
+                                 bert_insert_zh_1,
+                                 bert_insert_zh_2,
+                                 bert_replac_de_1,
+                                 bert_replac_de_2,
+                                 bert_replac_ru_1,
+                                 bert_replac_ru_2,
                                  ])
                 
                 # Flush and sync to ensure the line is committed to disk
@@ -290,11 +345,11 @@ def precompute(input_dir, output_dir):
     src_dir = Path(input_dir)
     output_dir = Path(output_dir)
     if not os.path.exists(output_dir): os.mkdir(output_dir)
-    for src_name, dst_name in zip(['train_precomputed.tsv',], #'dev.tsv', 'test.tsv'],
-                                  ['train_precomputed_12.tsv',]): #'dev.tsv', 'test.tsv']):
+    for src_name, dst_name in zip(['train_precomputed_12.tsv',], #'dev.tsv', 'test.tsv'],
+                                  ['train_precomputed_16.tsv',]): #'dev.tsv', 'test.tsv']):
         source = src_dir / src_name
         dest = output_dir / dst_name
-        progressfile = output_dir / 'last_processed_line_12.txt'
+        progressfile = output_dir / 'last_processed_line_16.txt'
         main(source, dest,progressfile)
 
 if __name__ == "__main__":

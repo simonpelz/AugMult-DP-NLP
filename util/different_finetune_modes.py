@@ -1,3 +1,4 @@
+import warnings
 from transformers import AutoTokenizer, AutoConfig, AutoModelForSequenceClassification
 
 def classifier_only(model):
@@ -11,6 +12,8 @@ def last_3(model):
 
 
 def classifier_and_pooler(model):
+    #for name,p in model.named_parameters():
+    #    print(f"{name}   -   {p.numel()}")
     layers = [model.bert.pooler, model.classifier]
     return set_from_layer_list(layers,model)
 
@@ -62,7 +65,11 @@ def model_and_tokenizer(model_name, num_labels):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = AutoConfig.from_pretrained(model_name)
     config.num_labels = num_labels
-    model = AutoModelForSequenceClassification.from_pretrained(model_name, config=config) # TODO for HoC change problem_type
+    if num_labels == 5: 
+        warnings.warn("Assuming Multilabel Classification! based on num_labels=5")
+        config.problem_type = "multi_label_classification"  # Specify multilabel classification
+
+    model = AutoModelForSequenceClassification.from_pretrained(model_name, config=config)
     model.train()
     return model, tokenizer
 
@@ -75,6 +82,7 @@ def get_param_setter_from_str(name):
 
 
 def main():
+    #MODEL_NAME = "roberta-large"
     MODEL_NAME = "bert-base-uncased"
     NUM_LABELS = 2
 
@@ -82,7 +90,7 @@ def main():
 
     #layer_list = [model.bert.pooler, model.classifier]
     #trainable_param_setter = lambda model: set_from_layer_list(layer_list,model)
-    trainable_param_setter = classifier_only
+    trainable_param_setter = classifier_and_pooler#classifier_only
     total_p, trainable_p = trainable_param_setter(model)
 
     print(f"total params: {total_p}, trainable:{trainable_p}")
