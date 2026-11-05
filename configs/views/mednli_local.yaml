@@ -1,0 +1,33 @@
+# TEMPLATE for credentialed data (MedNLI, PhysioNet DUA). Everything stays on this machine:
+#  * models are local HF checkpoints run with transformers/vLLM -- never hosted LLM APIs;
+#  * outputs/ is git-ignored -- never commit generated views (they contain dataset text);
+#  * scorers must be public models not trained on MIMIC/MedNLI (check model cards: e.g. avoid
+#    MIMIC-pretrained encoders as "public" scorers).
+name: mednli_local
+seed: 0
+k: 8
+pair_combine: alternate
+dataset:
+  type: local
+  format: tsv
+  data_files: ${DATASET_DIR}/train.tsv   # environment variables are expanded
+  split: train
+  columns: {text_a: sentence1, text_b: sentence2, label: label}
+generators:
+  - method: llm_paraphrase
+    model: Qwen/Qwen2.5-3B-Instruct
+    backend: auto
+    user_template: >-
+      Paraphrase the clinical text below. Keep every finding, negation, measurement, unit, medication,
+      abbreviation meaning and time reference exactly as stated; vary only wording and structure.
+      Output only the paraphrase.
+
+      Text: {text}
+    max_new_tokens: 192
+  - method: backtranslation
+    backend: nllb
+    pivots: [deu_Latn, fra_Latn, spa_Latn, zho_Hans]
+scorers:
+  - {name: lexical}
+  - {name: similarity}
+  - {name: nli, model: cross-encoder/nli-deberta-v3-small}

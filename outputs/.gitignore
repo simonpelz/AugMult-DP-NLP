@@ -1,0 +1,3 @@
+# Generated view stores may contain (private) dataset text: never commit them.
+*
+!.gitignore

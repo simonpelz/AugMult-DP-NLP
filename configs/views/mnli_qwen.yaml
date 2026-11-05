@@ -1,0 +1,25 @@
+# MultiNLI (public NLI): each side of the pair is paraphrased independently -- the generator never
+# sees the other side or the label. "alternate" rewrites exactly one side per view (more label-preserving
+# than "zip", which rewrites both).
+name: mnli_qwen
+seed: 0
+k: 8
+pair_combine: alternate
+dataset:
+  type: hub
+  path: nyu-mll/multi_nli
+  split: train
+  columns: {text_a: premise, text_b: hypothesis, label: label, id: pairID}
+generators:
+  - method: llm_paraphrase
+    model: Qwen/Qwen2.5-1.5B-Instruct
+    backend: auto
+    temperature: 0.9
+    top_p: 0.95
+    max_new_tokens: 160
+    batch_size: 16
+    fields: [a, b]
+scorers:
+  - {name: lexical}
+  - {name: similarity}
+  - {name: nli, model: cross-encoder/nli-deberta-v3-small}

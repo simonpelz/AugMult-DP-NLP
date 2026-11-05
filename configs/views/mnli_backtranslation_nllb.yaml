@@ -1,0 +1,24 @@
+# Back-translation views with NLLB-200 (distilled 600M) through four pivots, one view per pivot.
+# Set samples_per_pivot > 1 to sample several back-translations per pivot (more, noisier views).
+name: mnli_bt_nllb
+seed: 0
+k: 8
+pair_combine: alternate
+dataset:
+  type: hub
+  path: nyu-mll/multi_nli
+  split: train
+  columns: {text_a: premise, text_b: hypothesis, label: label, id: pairID}
+generators:
+  - method: backtranslation
+    backend: nllb                         # or: opus (Helsinki-NLP/opus-mt-en-<p> / opus-mt-<p>-en)
+    model: facebook/nllb-200-distilled-600M
+    src_lang: eng_Latn
+    pivots: [deu_Latn, fra_Latn, zho_Hans, rus_Cyrl]
+    samples_per_pivot: 1
+    num_beams: 4
+    batch_size: 16
+scorers:
+  - {name: lexical}
+  - {name: similarity}
+  - {name: nli, model: cross-encoder/nli-deberta-v3-small}
