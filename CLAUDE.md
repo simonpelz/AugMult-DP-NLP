@@ -2,7 +2,7 @@
 
 Research code for a TUM BSc thesis: **Augmentation Multiplicity (AugMult) for DP-SGD fine-tuning of BERT** (SST-2, MedNLI).
 AugMult is K augmented views per example, with per-example gradients **averaged over views before clipping**, so it has no extra privacy cost.
-Last code change: Nov 2024. The continuation plan, code audit, literature review and roadmap are in **`docs/CONTINUATION.md`**. Read it first.
+**Plan of record: `docs/DIRECTION.md`** (read first). Background: `docs/CONTINUATION.md` (audit, literature review) and `docs/research/*.md`. New experiments use `dpaug/` (functional AugMult) and `views/` (offline view generation); the legacy pipeline is kept for reproducing the thesis.
 
 ## Layout
 - `run_experiment.py` — `run(...)` entry point: model, data, Opacus `PrivacyEngine` (monkey-patched), and the train/eval loop. CLI via `python run_experiment.py --help`.
