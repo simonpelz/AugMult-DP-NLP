@@ -173,3 +173,6 @@ cython_debug/
 #.idea/
 .vscode
 
+
+# Claude Code agent worktrees (temporary)
+.claude/worktrees/
