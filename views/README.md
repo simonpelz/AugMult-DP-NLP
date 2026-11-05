@@ -5,7 +5,7 @@ Precomputes K augmented **views** per training example with local models. The vi
 **Everything runs locally.** No hosted LLM APIs are called. This matters for credentialed data such as MedNLI under the PhysioNet DUA. Generated stores land in `outputs/`, which is git-ignored, because they contain dataset text.
 
 ```bash
-uv venv .venv-views && VIRTUAL_ENV=.venv-views uv pip install -r requirements-views.txt
+uv pip install -e ".[views]"            # from the repo root
 python -m views.generate --config configs/views/sst2_qwen.yaml --limit 100
 python -m views.filter --input outputs/views/<run> --k 8 --min-entail 0.8 --min-sim 0.7
 python -m pytest tests/views -q          # offline unit + end-to-end tests (no downloads)
