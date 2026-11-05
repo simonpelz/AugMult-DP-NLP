@@ -66,48 +66,85 @@ class Augmentations:
  # ----------------------------------------------------------------------------------------------------------------
 
 
-def get_transforms_from_str(transform_name):
-    if transform_name is None:
-        return [lambda x: x]
-    elif "precomputed" in transform_name:
+class ViewList(list):
+    """List of K view transforms. For precomputed data, `precomputed_views` names the TSV view
+    columns to load (see util/local_datasets.PRECOMPUTED_VIEW_COLUMNS); None otherwise.
+    Precomputed views are represented by `None` placeholders so that K == len(list)."""
+    precomputed_views = None
+
+
+def _parse_precomputed(transform_name):
+    """Returns (views, n_on_the_fly_augs).
+
+    Supported forms:
+      precomputed_AxB            legacy: first A views in canonical order x B on-the-fly augs
+      precomputed:v1,v2,...      explicit views (e.g. precomputed:sentence,zh,de), B=1
+      precomputed:v1,v2,...*B    explicit views x B on-the-fly augs
+    """
+    from util.local_datasets import CANONICAL_VIEW_ORDER
+    if transform_name.startswith("precomputed:"):
+        spec = transform_name[len("precomputed:"):]
+        spec, _, b = spec.partition("*")
+        views = [v.strip() for v in spec.split(",") if v.strip()]
+        aug = int(b) if b else 1
+    else:
         # of form eg: precomputed_2x3
         amounts = transform_name.split("_")[-1].split("x")
-        precomp,aug = int(amounts[0]),int(amounts[1])
-        if aug == 1: transform_list = [lambda x: x]
-        elif aug == 2: 
+        precomp, aug = int(amounts[0]), int(amounts[1])
+        if not 1 <= precomp <= len(CANONICAL_VIEW_ORDER):
+            raise ValueError(f"precomputed_{precomp}x{aug}: need 1 <= A <= {len(CANONICAL_VIEW_ORDER)}")
+        views = CANONICAL_VIEW_ORDER[:precomp]
+    if len(views) != len(set(views)):
+        raise ValueError(f"duplicate views in {transform_name}")
+    return views, aug
+
+
+def get_transforms_from_str(transform_name):
+    if transform_name is None or transform_name in ("none", "None"):
+        return ViewList([lambda x: x])
+    elif transform_name.startswith("identity"):
+        # K identical (unaugmented) views, e.g. identity4. Useful as a sanity check / to separate
+        # AugMult mechanics from augmentation content (also: encoder dropout differs per view).
+        k = int(transform_name[len("identity"):] or 1)
+        return ViewList([flexible_unaugmented for _ in range(k)])
+    elif transform_name.startswith("precomputed"):
+        views, aug = _parse_precomputed(transform_name)
+        if aug == 1: transform_list = ViewList([lambda x: x])
+        elif aug == 2:
             a = Augmentations(trnslt=False,bert=False,emb=False)
-            transform_list = [a.unaugmented,a.swap_word]
+            transform_list = ViewList([a.unaugmented,a.swap_word])
         elif aug == 3:
             a = Augmentations(trnslt=False,bert=False,emb=False)
-            transform_list = [a.unaugmented,a.synonym_wn,a.swap_word]
+            transform_list = ViewList([a.unaugmented,a.synonym_wn,a.swap_word])
         else: raise NotImplementedError
-        for i in range(precomp-1): 
-            for j in range(aug):
+        # pad with None placeholders so that K = n_views * n_augs
+        for _ in range(len(views)-1):
+            for _ in range(aug):
                 transform_list.append(None)
-        assert len(transform_list) == precomp*aug
+        assert len(transform_list) == len(views)*aug
+        transform_list.precomputed_views = views
         return transform_list
-
-
     elif transform_name == "eda5":
-        transform_list = Augmentations(trnslt=False,bert=False).eda(5)
-    elif "eda" in transform_name:
-        transform_list = Augmentations(trnslt=False).eda(int(transform_name[3:]))
+        transform_list = ViewList(Augmentations(trnslt=False,bert=False).eda(5))
+    elif transform_name.startswith("eda"):
+        transform_list = ViewList(Augmentations(trnslt=False).eda(int(transform_name[3:])))
     else:
-        raise NotImplementedError # TODO add support for other augs, and maybe list constructor from string eg. "un_typ_syn_emb_del" -> [...]
+        raise NotImplementedError(f"Unknown transform_name {transform_name!r}. Use None, identityK, edaK, "
+                                  "precomputed_AxB or precomputed:<view,...>[*B]")
     return transform_list
 
 
 def _load_emb():
     _model_dir = os.environ.get("MODEL_DIR")
+    if not _model_dir:
+        raise EnvironmentError("Set MODEL_DIR to a directory for word2vec/GloVe files (downloaded if missing).")
+    os.makedirs(_model_dir, exist_ok=True)
 
-    if not os.path.exists(_model_dir):
-        os.makedirs(_model_dir)
-
-    w2vec_path = os.path.abspath(_model_dir+'GoogleNews-vectors-negative300.bin')
+    w2vec_path = os.path.abspath(os.path.join(_model_dir, 'GoogleNews-vectors-negative300.bin'))
     if not os.path.isfile(w2vec_path):
         DownloadUtil.download_word2vec(dest_dir=_model_dir) # Download word2vec model
 
-    glove_path = os.path.abspath(_model_dir+'glove.6B.300d.txt')
+    glove_path = os.path.abspath(os.path.join(_model_dir, 'glove.6B.300d.txt'))
     if not os.path.isfile(glove_path):
         DownloadUtil.download_glove(model_name='glove.6B', dest_dir=_model_dir) # Download GloVe model
 
@@ -122,8 +159,7 @@ def _get_device():
 
 
 def main():
-    os.environ["MODEL_DIR"] = "/home/spelz/AugMult_DP_NLP/augmentation_models"
-    #sentence ="Sometimes to understand a word's meaning you need more than a definition; you need to see the word used in a sentence."
+    # requires MODEL_DIR to be set (see _load_emb)
     sentence = """When you've got snow, it's really hard to learn a snow sport so we looked at all the different ways I could mimic being on snow without actually being on snow."""
     transform_list = get_transforms_from_str("eda17")
     for aug in transform_list:

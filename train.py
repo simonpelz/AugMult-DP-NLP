@@ -7,6 +7,10 @@ import wandb
 from util.logging_util import track_time
 
 
+def _new_timers():
+    return {"this_batch": [], "log": []}
+
+
 def train(
     dp_model,
     dp_train_loader,
@@ -16,25 +20,27 @@ def train(
     max_phys_batch_size,
     steps,
     task_name,
+    multi_label=False,
+    metric=None,
 ):
-    
+
 
     logging_interval = 10
     to_mean_metrics = []
     to_mean_losses = []
     dp_model.train()
-    
-    # Reshape (N, K, max_len) to (N*K, max_len)
-    reshape_flatten = lambda x: x.view(-1, x.size(-1))  
 
-    augmentation_max_physical_batchsize = max_phys_batch_size // K
+    # Reshape (N, K, max_len) to (N*K, max_len)
+    reshape_flatten = lambda x: x.view(-1, x.size(-1))
+
+    augmentation_max_physical_batchsize = max(1, max_phys_batch_size // K)
 
     # Time Logging
-    data_loading_times, forward_times, backward_times, optimizer_times = {"this_batch":[],"log":[]},{"this_batch":[],"log":[]},{"this_batch":[],"log":[]},{"this_batch":[],"log":[]},
+    timers = {name: _new_timers() for name in ("data_loading", "forward", "backward", "optimizer")}
 
     step = steps
     # Using BatchMemoryManager for large batches
-    with BatchMemoryManager(data_loader=dp_train_loader, max_physical_batch_size=augmentation_max_physical_batchsize, optimizer=dp_optimizer) as memory_safe_data_loader: 
+    with BatchMemoryManager(data_loader=dp_train_loader, max_physical_batch_size=augmentation_max_physical_batchsize, optimizer=dp_optimizer) as memory_safe_data_loader:
         start_time = track_time()
         for batch in memory_safe_data_loader:
 
@@ -42,91 +48,97 @@ def train(
             for column in batch:
                 if column == 'labels':
                     # Duplicate labels from (N) to (N*K) relating to their samples and augmented versions
-                    batch['labels'] = torch.repeat_interleave(batch['labels'], repeats=K, dim=0)                    
-                else: 
+                    batch['labels'] = torch.repeat_interleave(batch['labels'], repeats=K, dim=0)
+                else:
                     batch[column] = reshape_flatten(batch[column])
-        
-            start_time = track_time(data_loading_times,start_time)
+
+            start_time = track_time(timers["data_loading"],start_time)
 
             # Forward pass
             batch = {k: v.to(device) for k, v in batch.items()}
-            dp_optimizer.zero_grad(set_to_none=True) 
+            if multi_label: batch['labels'] = batch['labels'].float()
+            dp_optimizer.zero_grad(set_to_none=True)
 
             outputs = dp_model(**batch)
 
-            loss = outputs.loss 
+            loss = outputs.loss
 
-            metric = compute_task_metric(outputs,batch,task_name)
+            batch_metric = compute_task_metric(outputs,batch,task_name,multi_label=multi_label,metric=metric)
 
-            start_time = track_time(forward_times,start_time)
-            
+            start_time = track_time(timers["forward"],start_time)
+
             # Backward pass
             loss.backward()
-            start_time = track_time(backward_times,start_time)
+            start_time = track_time(timers["backward"],start_time)
 
             # Optimization
             dp_optimizer.step()
-            start_time = track_time(optimizer_times,start_time)
+            start_time = track_time(timers["optimizer"],start_time)
 
 
             # Logging loss and acc
             is_updated = not (dp_optimizer._check_skip_next_step(pop_next=False))  # check if we are at the end of a true batch without incrementing the count.
-            if is_updated: 
-                step += 1  
+            if is_updated:
+                step += 1
 
-                for times in (data_loading_times,forward_times,backward_times,optimizer_times):
+                for times in timers.values():
                     times["log"].append(sum(times["this_batch"]))
                     times["this_batch"] = []
 
-                to_mean_metrics.append(metric)
+                # NOTE: metric/loss of the last physical batch of the logical batch, over all K views
+                to_mean_metrics.append(batch_metric)
                 to_mean_losses.append(loss.item())
                 if step % logging_interval == logging_interval-1:
                     l, m = np.mean(to_mean_losses), np.mean(to_mean_metrics)
                     stats = {
                         "train_loss": l,
                         "train_metric": m,
-                        "optimizer_time": np.mean(optimizer_times["log"]),
-                        "forward_time": np.mean(forward_times["log"]),
-                        "backward_time": np.mean(backward_times["log"]),
-                        "data_loading_time": np.mean(data_loading_times["log"]),
+                        "optimizer_time": np.mean(timers["optimizer"]["log"]),
+                        "forward_time": np.mean(timers["forward"]["log"]),
+                        "backward_time": np.mean(timers["backward"]["log"]),
+                        "data_loading_time": np.mean(timers["data_loading"]["log"]),
                     }
                     wandb.log(stats, step=step)
-                    
-                    # Reset the timers and accumulators
-                    for times in (data_loading_times,forward_times,backward_times,optimizer_times): times = {"this_batch":[],"log":[]}
+
+                    # Reset the timers and accumulators (in place; rebinding a loop variable does nothing)
+                    for times in timers.values():
+                        times["this_batch"].clear()
+                        times["log"].clear()
                     to_mean_metrics, to_mean_losses = [], []
-      
+
     return step
 
 
 
-def eval(model, eval_loader,device,task_name):
+def eval(model, eval_loader,device,task_name,multi_label=False,metric=None):
     """
-    Test the model on the testing set and the training set
+    Evaluate on a (non-augmented) split. The metric is computed over the whole split
+    (not averaged over batches); the loss is the example-weighted mean.
     """
     model.eval()
-    losses = []
-    test_metric = []
+    total_loss, n = 0.0, 0
+    all_logits, all_labels = [], []
 
     with torch.no_grad():
         for batch in eval_loader:
 
             batch = {k: v.to(device) for k, v in batch.items()}
+            if multi_label: batch['labels'] = batch['labels'].float()
             outputs = model(**batch)
 
-            loss = outputs.loss 
-            metric = compute_task_metric(outputs,batch,task_name)
-
-            losses.append(loss.item())
-            test_metric.append(metric)
-
-    test_metric_avg = np.mean(test_metric)
-    losses_avg  = np.mean(losses)
+            bs = batch['labels'].shape[0]
+            total_loss += outputs.loss.item() * bs
+            n += bs
+            all_logits.append(outputs.logits.detach().cpu())
+            all_labels.append(batch['labels'].detach().cpu())
 
     model.train()
 
-    return (test_metric_avg,losses_avg)
-                
+    logits = torch.cat(all_logits)
+    labels = torch.cat(all_labels)
+    metric_value = compute_metric(logits, labels, task_name, multi_label=multi_label, metric=metric)
+    return (metric_value, total_loss / max(n, 1))
+
 
 # Define task-specific metric functions
 def compute_accuracy(preds, labels):
@@ -135,31 +147,52 @@ def compute_accuracy(preds, labels):
 def compute_mcc(preds, labels):
     return matthews_corrcoef(labels, preds)
 
-def compute_f1_ner(preds, labels):
+def compute_f1_weighted(preds, labels):
     return f1_score(labels, preds, average='weighted')
 
+def compute_micro_f1(preds, labels):
+    return f1_score(labels, preds, average='micro', zero_division=0)
 
-def compute_task_metric(outputs, batch, task):
-    # Get predictions and labels
-    if task != 'regression':  # For classification tasks
-        preds = np.argmax(outputs.logits.detach().cpu().numpy(), axis=1)
-    else:  # For regression (not in current tasks, but flexibility for future)
-        preds = outputs.logits.detach().cpu().numpy()
-        
-    labels = batch['labels'].detach().cpu().numpy()
+def compute_macro_f1(preds, labels):
+    return f1_score(labels, preds, average='macro', zero_division=0)
 
-    # Map tasks to corresponding metric functions
-    task_metrics = {
-    'cola': compute_mcc,  # CoLA - Matthews Correlation Coefficient (MCC)
-    'qnli': compute_accuracy,  # QNLI - Accuracy
-    'sst2': compute_accuracy,  # SST-2 - Accuracy
-    'conll2003': compute_f1_ner  # CoNLL 2003 (NER) - F1 Score
-    }
 
-    # Select the appropriate metric function based on the task
-    metric_fn = task_metrics.get(task.lower(), compute_accuracy)  # Default to accuracy if task not listed
-    
-    # Compute and return the metric value
-    metric_value = metric_fn(preds, labels)
-    
-    return metric_value
+METRICS = {
+    'accuracy': compute_accuracy,
+    'mcc': compute_mcc,
+    'f1_weighted': compute_f1_weighted,
+    'micro_f1': compute_micro_f1,
+    'macro_f1': compute_macro_f1,
+}
+
+# Map tasks to their default metric
+TASK_METRICS = {
+    'cola': 'mcc',  # CoLA - Matthews Correlation Coefficient (MCC)
+    'qnli': 'accuracy',  # QNLI - Accuracy
+    'sst2': 'accuracy',  # SST-2 - Accuracy
+    'conll2003': 'f1_weighted',  # CoNLL 2003 (NER) - F1 Score
+}
+
+
+def default_metric_name(task, multi_label=False):
+    if multi_label:
+        return 'micro_f1'
+    return TASK_METRICS.get(task.lower(), 'accuracy')  # Default to accuracy if task not listed
+
+
+def compute_metric(logits, labels, task, multi_label=False, metric=None):
+    logits = logits.detach().cpu()
+    labels = labels.detach().cpu().numpy()
+    if multi_label:
+        preds = (torch.sigmoid(logits) > 0.5).int().numpy()
+        labels = labels.astype(int)
+    elif task == 'regression':  # For regression (not in current tasks, but flexibility for future)
+        preds = logits.numpy()
+    else:  # For classification tasks
+        preds = np.argmax(logits.numpy(), axis=1)
+    metric_fn = METRICS[metric or default_metric_name(task, multi_label)]
+    return metric_fn(preds, labels)
+
+
+def compute_task_metric(outputs, batch, task, multi_label=False, metric=None):
+    return compute_metric(outputs.logits, batch['labels'], task, multi_label=multi_label, metric=metric)

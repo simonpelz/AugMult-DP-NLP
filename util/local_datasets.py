@@ -1,4 +1,4 @@
-
+import argparse
 import os
 from pathlib import Path
 import tqdm
@@ -7,23 +7,23 @@ import csv
 from abc import ABC, abstractmethod
 from torch.utils.data import Dataset
 import torch
-import signal
 
 
 class AbstractDataset(Dataset, ABC):
+    """Minimal list-of-dicts dataset mimicking the parts of the HF `datasets.Dataset` API used here."""
+
     def __init__(self):
         self.samples = self._load_data()
-        self.column_names = self._get_column_names()
 
     @abstractmethod
     def _load_data(self):
         """Method to load data. Must be implemented by subclasses."""
         pass
 
-    @abstractmethod
-    def _get_column_names(self):
-        """Property to define column names. Must be implemented by subclasses."""
-        pass
+    @property
+    def column_names(self):
+        # derived from the data so it stays correct after map/rename/remove
+        return list(self.samples[0].keys()) if self.samples else []
 
     def __len__(self):
         return len(self.samples)
@@ -31,24 +31,15 @@ class AbstractDataset(Dataset, ABC):
     def __getitem__(self, idx):
         sample = self.samples[idx]
         return sample
-    
+
     def select(self, indices):
         self.samples = [self.samples[i] for i in indices]
         return self
 
     def map(self, function, batched=False, batch_size=32):
-        """Apply a function to each sample or batch of samples in the dataset."""
-        batched = False  # ignore batched directive
-        if batched:
-            new_samples = []
-            for i in range(0, len(self.samples), batch_size):
-                batch = self.samples[i:i+batch_size]
-                new_batch = function(batch)
-                new_samples.extend(new_batch)
-            self.samples = new_samples
-        else:
-            for sample in self.samples:
-                sample.update(function(sample))
+        """Apply a function to each sample (the `batched` directive is ignored)."""
+        for sample in self.samples:
+            sample.update(function(sample))
         return self
 
     def rename_column(self, old_column_name, new_column_name):
@@ -70,14 +61,13 @@ class AbstractDataset(Dataset, ABC):
     def remove_columns(self, column_names):
         for name in column_names:
             for sample in self.samples:
-                if name in sample:
-                    sample.pop(name)
-                else:
-                    break
+                sample.pop(name, None)
         return self
 
 
 class LocalTSVDataset(AbstractDataset):
+    """Sentence-pair TSV with columns sentence1, sentence2, label (MedNLI format)."""
+
     def __init__(self, tsv_file):
         self.tsv_file = tsv_file
         super().__init__()
@@ -94,9 +84,7 @@ class LocalTSVDataset(AbstractDataset):
                 })
         return samples
 
-    def _get_column_names(self):
-        return ['sentence1', 'sentence2', 'label']
-    
+
 def processHocLabel(label_str):
     result_label = []
     for i,index_value in enumerate(label_str.split(',')):
@@ -105,7 +93,10 @@ def processHocLabel(label_str):
         result_label.append(int(value))
     return result_label
 
+
 class LocalHoCDataset(AbstractDataset):
+    """Hallmarks of Cancer (multi-label). Labels are multi-hot lists (10 classes in BLURB HoC)."""
+
     def __init__(self, tsv_file):
         self.tsv_file = tsv_file
         super().__init__()
@@ -120,105 +111,86 @@ class LocalHoCDataset(AbstractDataset):
                     'label': processHocLabel(row['labels']),
                 })
         return samples
-    
-
-    def _get_column_names(self):
-        return ['sentence', 'label']
 
 
-class K5PrecomputedAugsDataset(AbstractDataset):
-    def __init__(self, tsv_file):
-        self.tsv_file = tsv_file
-        super().__init__()
+# ---------------------------------------------------------------------------------------------
+# Precomputed views
+#
+# view name -> (TSV column of sentence1 view, TSV column of sentence2 view).
+# The order of this dict is the canonical view order: "precomputed_A..." / K-scaling uses the
+# first A views. It matches the column order of train_precomputed_16.tsv (original, the 11
+# back-translation pivots, then 4 BlueBERT views), which is also the order in which the thesis
+# files were built (train_precomputed_5 -> _12 -> _16).
+#
+# NOTE on the BlueBERT columns: the precomputation script (below) wrote headers
+# bert_insert_zh_*, bert_replac_de_*, bert_replac_ru_*, but *all four* BlueBERT views were
+# computed from the ORIGINAL sentences, not from the zh/de/ru back-translations. They are
+# exposed here under honest names (two independent insert samples, two independent replace
+# samples) while still reading the legacy headers.
+# ---------------------------------------------------------------------------------------------
+PRECOMPUTED_VIEW_COLUMNS = {
+    "sentence": ("sentence1", "sentence2"),  # original (unaugmented)
+    "zh": ("zh1", "zh2"),
+    "de": ("de1", "de2"),
+    "ru": ("ru1", "ru2"),
+    "ar": ("ar1", "ar2"),
+    "af": ("af1", "af2"),
+    "fr": ("fr1", "fr2"),
+    "es": ("es1", "es2"),
+    "id": ("id1", "id2"),
+    "it": ("it1", "it2"),
+    "nl": ("nl1", "nl2"),
+    "fi": ("fi1", "fi2"),
+    "bert_insert_a": ("bert_insert_og_1", "bert_insert_og_2"),
+    "bert_insert_b": ("bert_insert_zh_1", "bert_insert_zh_2"),   # legacy header is misleading, see note
+    "bert_replace_a": ("bert_replac_de_1", "bert_replac_de_2"),  # legacy header is misleading, see note
+    "bert_replace_b": ("bert_replac_ru_1", "bert_replac_ru_2"),  # legacy header is misleading, see note
+}
+CANONICAL_VIEW_ORDER = list(PRECOMPUTED_VIEW_COLUMNS)
 
-    def _load_data(self):
-        samples = []
-        with open(self.tsv_file, 'r', encoding='utf8') as file:
-            reader = csv.DictReader(file, delimiter='\t')
-            for row in reader:
-                samples.append({
-                    'sentence1': row['sentence1'],
-                    'sentence2': row['sentence2'],
-                    'label': int(row['label']),
-
-                    'zh1': row['zh1'],
-                    'zh2': row['zh2'],
-                    'de1': row['de1'],
-                    'de2': row['de2'],
-                    'ru1': row['ru1'],
-                    'ru2': row['ru2'],
-                    'ar1': row['ar1'],
-                    'ar2': row['ar2'],
-                })
-        return samples
-
-    def _get_column_names(self):
-        return ['sentence1', 'sentence2', 'label', 'zh1','zh2','de1','de2','ru1','ru2','ar1','ar2',]
 
 class PrecomputedAugsDataset(AbstractDataset):
-    def __init__(self, tsv_file):
+    """Sentence-pair TSV with precomputed augmented views.
+
+    Each sample is {"label", "<view>1", "<view>2", ...} for the selected views, in the given order.
+    views=None loads every known view present in the file (canonical order).
+    """
+
+    def __init__(self, tsv_file, views=None):
         self.tsv_file = tsv_file
+        self.views = list(views) if views is not None else None
         super().__init__()
 
     def _load_data(self):
         samples = []
         with open(self.tsv_file, 'r', encoding='utf8') as file:
             reader = csv.DictReader(file, delimiter='\t')
+            header = set(reader.fieldnames or [])
+            available = [v for v, cols in PRECOMPUTED_VIEW_COLUMNS.items() if all(c in header for c in cols)]
+            if self.views is None:
+                self.views = available
+            unknown = [v for v in self.views if v not in PRECOMPUTED_VIEW_COLUMNS]
+            missing = [v for v in self.views if v in PRECOMPUTED_VIEW_COLUMNS and v not in available]
+            if unknown or missing:
+                raise ValueError(f"Requested views not available in {self.tsv_file}: unknown={unknown}, "
+                                 f"missing columns={missing}. Available: {available}")
             for row in reader:
-                samples.append({
-                    'sentence1': row['sentence1'],
-                    'sentence2': row['sentence2'],
-                    'label': int(row['label']),
-
-                    'zh1': row['zh1'],
-                    'zh2': row['zh2'],
-                    'de1': row['de1'],
-                    'de2': row['de2'],
-                    'ru1': row['ru1'],
-                    'ru2': row['ru2'],
-                    'ar1': row['ar1'],
-                    'ar2': row['ar2'],
-                    'af1': row['af1'],
-                    'af2': row['af2'],
-                    'fr1': row['fr1'],
-                    'fr2': row['fr2'],
-                    'es1': row['es1'],
-                    'es2': row['es2'],
-                    'id1': row['id1'],
-                    'id2': row['id2'],
-                    'it1': row['it1'],
-                    'it2': row['it2'],
-                    'nl1': row['nl1'],
-                    'nl2': row['nl2'],
-                    'fi1': row['fi1'],
-                    'fi2': row['fi2'],
-                    'bo1': row['bert_insert_og_1'],
-                    'bo2': row['bert_insert_og_2'],
-                    'bz1': row['bert_insert_zh_1'],
-                    'bz2': row['bert_insert_zh_2'],
-                    'bd1': row['bert_replac_de_1'],
-                    'bd2': row['bert_replac_de_2'],
-                    'br1': row['bert_replac_ru_1'],
-                    'br2': row['bert_replac_ru_2'],
-                })
+                sample = {'label': int(row['label'])}
+                for v in self.views:
+                    c1, c2 = PRECOMPUTED_VIEW_COLUMNS[v]
+                    sample[v + "1"] = row[c1]
+                    sample[v + "2"] = row[c2]
+                samples.append(sample)
         return samples
 
-    def _get_column_names(self):
-        return ['label','sentence1', 'sentence2', 'zh1','zh2','de1','de2','ru1','ru2','ar1','ar2',
-                             'af1','af2',
-                             'fr1','fr2',
-                             'es1','es2',
-                             'id1','id2',
-                             'it1','it2',
-                             'nl1','nl2',
-                             'fi1','fi2',
-                             'bo1','bo2',
-                             'bz1','bz2',
-                             'bd1','bd2',
-                             'br1','br2',
-                             ]
 
 
+#-------------------------------------------------------------------------------------
+#--------------------------------precomputation---------------------------------------
+#-------------------------------------------------------------------------------------
+# Offline script used to build train_precomputed_16.tsv from train_precomputed_12.tsv.
+# It writes the LEGACY column names (see PRECOMPUTED_VIEW_COLUMNS note): all four BlueBERT
+# columns are computed from the original sentences.
 
 #-------------------------------------------------------------------------------------
 #--------------------------------precomputation---------------------------------------
@@ -252,7 +224,7 @@ def main(fromfile,tofile,progressfile):
     bt_aug_fi = naw.BackTranslationAug(from_model_name='Helsinki-NLP/opus-mt-en-fi',to_model_name='Helsinki-NLP/opus-mt-fi-en',device="cuda",name="fi",).augment
     """
     word_params = {"aug_p":0.1,"aug_max":15,}
-    emb_param = {"top_k": 5,**word_params,"model_path":'bionlp/bluebert_pubmed_uncased_L-12_H-768_A-12',"device":"cuda"}
+    emb_param = {"top_k": 5,**word_params,"model_path":'bionlp/bluebert_pubmed_uncased_L-12_H-768_A-12',"device": "cuda" if torch.cuda.is_available() else "cpu"}
     med_insert = naw.ContextualWordEmbsAug(**emb_param, action="insert",name="bert_insert").augment
     med_replac = naw.ContextualWordEmbsAug(**emb_param, action="substitute",name="bert_replace").augment
     print("\nfinished loading models")
@@ -340,17 +312,27 @@ def main(fromfile,tofile,progressfile):
                 break  # Handle error, can retry on next run
 
 
-def precompute(input_dir, output_dir):
-    print("start resolving path")
+
+
+def precompute(input_dir, output_dir, src_name='train_precomputed_12.tsv', dst_name='train_precomputed_16.tsv'):
     src_dir = Path(input_dir)
     output_dir = Path(output_dir)
-    if not os.path.exists(output_dir): os.mkdir(output_dir)
-    for src_name, dst_name in zip(['train_precomputed_12.tsv',], #'dev.tsv', 'test.tsv'],
-                                  ['train_precomputed_16.tsv',]): #'dev.tsv', 'test.tsv']):
-        source = src_dir / src_name
-        dest = output_dir / dst_name
-        progressfile = output_dir / 'last_processed_line_16.txt'
-        main(source, dest,progressfile)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    source = src_dir / src_name
+    dest = output_dir / dst_name
+    dest.touch(exist_ok=True)
+    progressfile = output_dir / f'last_processed_line_{Path(dst_name).stem}.txt'
+    main(source, dest, progressfile)
+
 
 if __name__ == "__main__":
-    precompute("/home/spelz/AugMult_DP_NLP/datasets/processed","/home/spelz/AugMult_DP_NLP/datasets/processed")
+    parser = argparse.ArgumentParser(description="Precompute BlueBERT views (resumable). "
+                                                 "Defaults read/write $DATASET_DIR.")
+    parser.add_argument("--input_dir", default=os.environ.get("DATASET_DIR"))
+    parser.add_argument("--output_dir", default=os.environ.get("DATASET_DIR"))
+    parser.add_argument("--src_name", default="train_precomputed_12.tsv")
+    parser.add_argument("--dst_name", default="train_precomputed_16.tsv")
+    args = parser.parse_args()
+    if not args.input_dir or not args.output_dir:
+        raise SystemExit("Pass --input_dir/--output_dir or set DATASET_DIR.")
+    precompute(args.input_dir, args.output_dir, args.src_name, args.dst_name)

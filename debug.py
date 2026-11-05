@@ -19,6 +19,7 @@ params = {
     'glue': True,  
     'max_phys_batchsize': 4096, # 5500 still not out of memory!
     'transform_name': "eda5",  
+    'seed': 0,
     }
 
 if __name__ == "__main__":
