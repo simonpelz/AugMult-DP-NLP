@@ -4,7 +4,7 @@ import pytest
 import torch
 from torch import nn
 
-from conftest import make_inputs, make_model
+from dpaug_helpers import make_inputs, make_model
 from dpaug import (
     DPAugMult,
     DPConfig,

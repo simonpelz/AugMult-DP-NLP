@@ -10,7 +10,7 @@ import torch
 import torch.nn.functional as F
 from torch.func import functional_call, grad
 
-from conftest import flatten_views, multiview_batch, tiny_bert
+from legacy_helpers import flatten_views, multiview_batch, tiny_bert
 
 from augmult.augmult_grad_sample_module import GradSampleModuleAugMult
 from util.privacy_engine_util import prepare_gradsamplers

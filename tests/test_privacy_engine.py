@@ -7,7 +7,7 @@ import pytest
 import torch
 from torch.utils.data import DataLoader, Dataset
 
-from conftest import SEQ_LEN, multiview_batch, tiny_bert
+from legacy_helpers import SEQ_LEN, multiview_batch, tiny_bert
 
 from util.privacy_engine_util import (
     _prepare_model_modified,

@@ -2,7 +2,7 @@
 
 import torch
 
-from conftest import flatten_views, multiview_batch, tiny_bert
+from legacy_helpers import flatten_views, multiview_batch, tiny_bert
 from test_grad_samplers import ATOL, RTOL, reference_per_example_grads
 
 from augmult.augmult_bias_grad_sample_module import GradSampleModuleAugMultBias
