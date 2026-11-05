@@ -13,15 +13,18 @@ Last code change: Nov 2024. The continuation plan, code audit, literature review
 - `augmult/data.py`, `augmult/augmentations.py`, `util/local_datasets.py` — data, nlpaug augmentations, and the offline precomputation of back-translations.
 - `init_sweep.py` / `execute_sweep.py` — W&B sweep and SLURM agent. `non_dp.py` — non-private baseline.
 
-## Running (legacy environment)
-- Env: `environment.yml` (Python 3.9, torch 2.4, opacus 1.5.2, transformers 4.41). It does **not** install on Python ≥ 3.13; `run_experiment.py` imports `uu`. A modernized env is planned (see the roadmap).
-- Env vars: `DATASET_DIR` (MedNLI/HoC TSVs), `MODEL_DIR` (word vectors), `CKPT_PATH`, `WANDB_DIR`, `MAX_PHYS_BATCHSIZE`.
-- Data is **not in the repo**. MedNLI requires PhysioNet credentialing. **Never commit dataset files or model outputs containing dataset text**, and never send MedNLI text to hosted third-party APIs (DUA). Use local models for paraphrasing.
+## Running
+- Modern env: `pyproject.toml` (Python 3.11/3.12, torch>=2.6, opacus>=1.6, transformers 5). `pip install -e ".[dev]"` (+ `.[aug]` for nlpaug/EDA). Tests: `pytest tests -q` (CPU, offline tiny models). The legacy `environment.yml` is kept for thesis reproduction only.
+- Smoke run (CPU, public data): `WANDB_MODE=disabled python run_experiment.py --dataset_name sst2 --model_name google/bert_uncased_L-2_H-128_A-2 --dataset_size 128 --epochs 1 --batch_size 32 --target_epsilon 8 --transforms_name identity2 --seed 0`. `prajjwal1/bert-tiny` fails to load its tokenizer on transformers 5 (it has only a vocab.txt).
+- Any public HF dataset: `--hf_path/--hf_config/--text_columns/--label_column/--splits`. Privacy knobs: `--delta {1/n,n^-1.1,<float>}`, `--accountant {rdp,prv}`, `--seed`. Precomputed views: `precomputed:<view,...>[*B]`.
+- Env vars: `DATASET_DIR` (local TSVs), `MODEL_DIR` (word vectors), `CKPT_PATH`, `WANDB_DIR`, `JOBS_DIR`, `MAX_PHYS_BATCHSIZE`.
+- Data is **not in the repo**, and the owner has **no PhysioNet access**: use public datasets (see docs/research/datasets_models_compute.md). **Never commit dataset files or outputs containing dataset text** (clear notebook outputs before committing), and never send private data to hosted third-party APIs. Generate LLM views with local models only.
 
-## Known issues (see docs/CONTINUATION.md §2 for the full list)
-- `augmult/data.py:get_dataset` — MedNLI loading raises `NotImplementedError` (`if`/`if`/`else` should be `elif`).
-- No seeding; the test split is never evaluated; δ = 1/n (too loose).
-- K-subset experiments (K < 16) need local edits to `PrecomputedAugsDataset`.
+## Status / known issues
+- The AugMult grad samplers are verified against `torch.func` per-example grads (tests/test_grad_samplers.py). The audit items in docs/CONTINUATION.md §2 are fixed (see the commit log), except the history issue below.
+- `scrap.ipynb` contains restricted MedNLI text in its outputs, including in git history. The cleanup is pending the owner's decision. Do not copy its contents anywhere.
+- The Opacus `_prepare_model` is still monkey-patched (Opacus 1.6 has no public custom grad-sample-mode hook); `wrap_model=False` is unsupported for "augmult".
+- Research direction and reports: docs/research/*.md.
 
 ## Conventions for changes
 - Anything touching clipping, noise, sampling or accounting is privacy-critical. Add or extend a test that compares against vanilla Opacus or `torch.func` per-sample gradients, and state the privacy unit, ε, δ and accountant in the PR.
