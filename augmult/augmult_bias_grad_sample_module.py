@@ -206,7 +206,9 @@ class GradSampleModuleAugMultBias(AbstractGradSampleModule):
             )
 
             self.autograd_grad_sample_hooks.append(
-                module.register_backward_hook(
+                # Opacus>=1.5.4 uses full backward hooks; the legacy non-full hook is deprecated
+                # in torch and can miss grad_input for multi-node forwards.
+                module.register_full_backward_hook(
                     partial(
                         self.capture_backprops_hook,
                         loss_reduction=loss_reduction,
@@ -261,8 +263,9 @@ class GradSampleModuleAugMultBias(AbstractGradSampleModule):
         self.hooks_enabled = True
 
     def _close(self):
+        # Opacus>=1.6: AbstractGradSampleModule._close() -> cleanup() already calls
+        # self.remove_hooks(); calling it again raised "no hooks found".
         super()._close()
-        self.remove_hooks()
 
     def capture_activations_hook(
         self,
