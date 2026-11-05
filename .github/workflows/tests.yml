@@ -1,0 +1,29 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install (CPU torch)
+        run: |
+          uv venv
+          uv pip install --index-url https://download.pytorch.org/whl/cpu torch
+          uv pip install -e ".[dev]"
+      - name: Ruff (lenient)
+        run: uv run --no-sync ruff check .
+      - name: Pytest
+        run: uv run --no-sync pytest
+        env:
+          HF_HUB_OFFLINE: "1"
+          WANDB_MODE: disabled

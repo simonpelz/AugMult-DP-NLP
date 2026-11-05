@@ -1,3 +1,5 @@
+# LEGACY environment used for the 2024 thesis runs (Python 3.9, torch 2.4, opacus 1.5.2).
+# For new work use pyproject.toml (Python >=3.11, torch >=2.6, opacus >=1.6); see tests/.
 name: augmult
 channels:
   - anaconda

@@ -21,14 +21,25 @@ from opacus.optimizers.optimizer import _check_processed_flag,_generate_noise,_m
 
 
 def empty_batch_handling(mv_train_loader,dp_train_loader,mv_collate):
-    sample_empty_shapes = {k: (0, *shape_safe(v)) for k, v in mv_train_loader.dataset[0].items()}
-    dtypes = {k: dtype_safe(v) for k, v in mv_train_loader.dataset[0].items()}
+    """Install a collate that returns correctly shaped empty batches for empty Poisson draws.
+
+    Empty shapes are taken from the *collated* (tokenized, multi-view) output of one real
+    sample, e.g. ``input_ids: (0, K, L)`` and ``labels: (0,)``. Previously they were taken
+    from the raw dataset row (string columns), which produced the wrong keys and shapes.
+    The probe sample only fixes shapes/dtypes; its values never enter training.
+    """
+    probe = mv_collate([mv_train_loader.dataset[0]])
+    sample_empty_shapes = {k: (0, *shape_safe(v)[1:]) for k, v in probe.items()}
+    dtypes = {k: dtype_safe(v) for k, v in probe.items()}
     dp_train_loader.collate_fn = dict_wrap_collate_with_empty(collate_fn=mv_collate, sample_empty_shapes=sample_empty_shapes, dtypes=dtypes)
 
 
 def prepare_gradsamplers(K,dp_model):
     dp_model.K = K
     augmented = AugmentationMultiplicity(K)
+    # Per-instance copy: GRAD_SAMPLERS is a class-level dict, so writing into it directly
+    # leaked K into every other GradSampleModuleAugMult instance in the same process.
+    dp_model.GRAD_SAMPLERS = dict(type(dp_model).GRAD_SAMPLERS)
     dp_model.GRAD_SAMPLERS[nn.Linear] = augmented.compute_linear_grad_sample
     dp_model.GRAD_SAMPLERS[nn.LayerNorm] = augmented.compute_layer_norm_grad_sample
     return dp_model
@@ -69,11 +80,17 @@ def modified_get_gsm_class(grad_sample_mode: str) -> Type[AbstractGradSampleModu
         )
 
 
-def wrap_model(model: nn.Module, grad_sample_mode: str, *args, **kwargs):
+def wrap_model_augmult(model: nn.Module, grad_sample_mode: str, *args, **kwargs):
     cls = modified_get_gsm_class(grad_sample_mode)
     if grad_sample_mode == "functorch":
         kwargs["force_functorch"] = True
     return cls(model, *args, **kwargs)
+wrap_model = wrap_model_augmult  # backward-compatible name
+
+# NOTE (Opacus 1.6): there is still no public registry for custom grad_sample_modes
+# (get_gsm_class/get_hooks_class are hard-coded if/elif chains), so the monkey-patch of
+# PrivacyEngine._prepare_model is kept. The `wrap_model=False` hooks-only path is not
+# supported for "augmult".
 
 
 def _prepare_model_modified(
@@ -84,11 +101,15 @@ def _prepare_model_modified(
         max_grad_norm: Union[float, List[float]] = 1.0,
         loss_reduction: str = "mean",
         grad_sample_mode: str = "hooks",
+        wrap_model: bool = True,
     ) -> AbstractGradSampleModule:
         
     """
-    Identical copy from opacus PrivacyEngine, only difference is calling a modified get_gsm_class() to accomodate AugMultGradSampler
+    Copy of opacus PrivacyEngine._prepare_model; only difference is calling a modified get_gsm_class() to accomodate AugMultGradSampler.
+    Opacus>=1.6 passes `wrap_model`; only the default (True) is supported here.
     """
+    if not wrap_model:
+        raise NotImplementedError("wrap_model=False is not supported with the AugMult grad_sample_mode")
     # Ideally, validation should have been taken care of by calling
     # `get_compatible_module()`
     self.validate(module=module, optimizer=None, data_loader=None)
@@ -110,7 +131,7 @@ def _prepare_model_modified(
         return module
     else:
         if grad_sample_mode == "ghost":
-            return wrap_model(
+            return wrap_model_augmult(  # renamed: `wrap_model` is now also a kwarg
                 module,
                 grad_sample_mode=grad_sample_mode,
                 batch_first=batch_first,
@@ -118,7 +139,7 @@ def _prepare_model_modified(
                 max_grad_norm=max_grad_norm,
             )
         else:
-            return wrap_model(
+            return wrap_model_augmult(  # renamed: `wrap_model` is now also a kwarg
                 module,
                 grad_sample_mode=grad_sample_mode,
                 batch_first=batch_first,

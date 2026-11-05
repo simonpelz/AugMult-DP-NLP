@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "augmult-dp-nlp"
+version = "0.2.0"
+description = "Augmentation Multiplicity (AugMult) for DP-SGD fine-tuning of language models"
+readme = "README.md"
+requires-python = ">=3.11"
+# Lower bounds = versions the test suite was verified with (Nov 2026):
+# torch 2.15.0, opacus 1.6.0, transformers 5.22.1, datasets 5.1.0, accelerate 1.15.0,
+# peft 0.21.2, scikit-learn 1.9.1, numpy 2.5.4, wandb 0.31.0.
+# The legacy thesis environment (Python 3.9, torch 2.4, opacus 1.5.2) is environment.yml.
+dependencies = [
+    "torch>=2.6",
+    "opacus>=1.6",
+    "transformers>=4.50",
+    "datasets>=3.0",
+    "accelerate>=1.0",
+    "peft>=0.14",
+    "scikit-learn>=1.5",
+    "numpy>=1.26",
+    "wandb>=0.18",
+]
+
+[project.optional-dependencies]
+aug = [
+    "nlpaug>=1.1.11",
+    "nltk>=3.9",
+    "gensim>=4.3",
+    "sacremoses",
+    "sentencepiece",
+]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
+
+# CPU-only torch for CI / laptops:
+#   uv pip install --index-url https://download.pytorch.org/whl/cpu torch
+#   uv pip install -e ".[dev]"
+
+[tool.setuptools]
+packages = ["augmult", "util"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    "ignore:Full backward hook is firing when gradients are computed with respect to module outputs",
+    "ignore:Secure RNG turned off",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["*.ipynb"]
+
+[tool.ruff.lint]
+# Lenient on purpose (legacy research code): only syntax errors and undefined names.
+select = ["E9", "F63", "F7", "F82"]
