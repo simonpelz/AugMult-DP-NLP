@@ -1,0 +1,37 @@
+# SST-2 train, LLM paraphrases from a small local instruct model + rule views, fully scored.
+#   python -m views.generate --config configs/views/sst2_qwen.yaml --limit 100
+#   python -m views.filter --input outputs/views/<run> --k 8 --min-entail 0.8 --min-sim 0.7
+name: sst2_qwen
+seed: 0
+k: 8                    # candidate views per generator (identity view 0 is added separately)
+device: auto
+dataset:
+  type: hub
+  path: nyu-mll/glue
+  name: sst2
+  split: train
+  columns: {text_a: sentence, label: label, id: idx}
+generators:
+  - method: llm_paraphrase
+    model: Qwen/Qwen2.5-0.5B-Instruct   # bigger: Qwen/Qwen2.5-1.5B-Instruct, Qwen/Qwen2.5-3B-Instruct (GPU)
+    # Qwen3 models: also set chat_template_kwargs: {enable_thinking: false}
+    backend: auto                        # vllm if installed + CUDA, else transformers
+    temperature: 0.9
+    top_p: 0.95
+    max_new_tokens: 96
+    oversample: 1.5                      # draw ceil(1.5*k) samples, dedupe, keep k
+    batch_size: 8
+  - method: rule
+    k: 4
+    ops: [aeda, word_dropout, word_swap]
+scorers:
+  - {name: lexical}
+  - {name: similarity, model: sentence-transformers/all-MiniLM-L6-v2}
+  - {name: nli, model: cross-encoder/nli-deberta-v3-xsmall}
+  - name: task
+    model: distilbert/distilbert-base-uncased-finetuned-sst-2-english
+    label_map: {0: negative, 1: positive}
+    use_label: false   # true adds score_task_label_prob = P(own label | view); recorded as saw_label
+    public_data_note: >-
+      This classifier was fine-tuned on the (public) SST-2 train split. Acceptable only because SST-2 is
+      public; for private datasets use a classifier trained on disjoint public data.

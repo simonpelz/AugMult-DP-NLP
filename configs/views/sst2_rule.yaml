@@ -1,0 +1,17 @@
+# Rule-only views (AEDA / word dropout / word swap): no model downloads for generation.
+name: sst2_rule
+seed: 0
+k: 8
+dataset:
+  type: hub
+  path: nyu-mll/glue
+  name: sst2
+  split: train
+  columns: {text_a: sentence, label: label, id: idx}
+generators:
+  - method: rule
+    ops: [aeda, word_dropout, word_swap]
+    dropout_p: 0.1
+    swap_n: 1
+scorers:
+  - {name: lexical}

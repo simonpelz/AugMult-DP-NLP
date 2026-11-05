@@ -1,0 +1,27 @@
+# CPU smoke test: tiny instruct model + rule views on a handful of SST-2 sentences.
+#   python -m views.generate --config configs/views/sst2_smoke.yaml --limit 5
+name: sst2_smoke
+seed: 0
+k: 4
+device: cpu
+dataset:
+  type: hub
+  path: nyu-mll/glue
+  name: sst2
+  split: train
+  columns: {text_a: sentence, label: label, id: idx}
+generators:
+  - method: llm_paraphrase
+    model: HuggingFaceTB/SmolLM2-135M-Instruct
+    backend: transformers
+    temperature: 0.8
+    top_p: 0.95
+    max_new_tokens: 64
+    oversample: 2.0
+    batch_size: 5
+  - method: rule
+    k: 3
+scorers:
+  - {name: lexical}
+  - {name: similarity}
+  - {name: nli}
