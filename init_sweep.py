@@ -22,14 +22,13 @@ def main():
 
 def objective(config):
     max_phys_batchsize = int(os.environ.get('MAX_PHYS_BATCHSIZE', "4096"))
-    trainable_param_setter = get_param_setter_from_str("classifier_and_pooler")
-    transform_list = get_transforms_from_str(config.get("transform_name", None))
+    params = config.as_dict()
+    trainable_param_setter = get_param_setter_from_str(params.pop("param_setter", "classifier_and_pooler"))
+    transform_list = get_transforms_from_str(params.pop("transform_name", None))
     K = len(transform_list)
 
-    params = config.as_dict()
     params.update({"epochs": None, "K":K,"transform_list":transform_list,"trainable_param_setter":trainable_param_setter
                    ,"max_phys_batchsize":max_phys_batchsize})
-    params.pop("transform_name", None)
 
     return wrap_run_cuda(params) # pay attention to kwarg unwrapping or not
 
@@ -49,6 +48,10 @@ sweep_configuration = {
         "transform_name": {"value": None},
 
         "target_epsilon": {"value": 8},   
+        # Reproducibility / evaluation (not part of the thesis sweeps: those were unseeded, delta=1/n, rdp)
+        "seed": {"value": 0},
+        "delta": {"value": "1/n"},
+        "accountant": {"value": "rdp"},
 
         "dataset_size": {"value": None},   
         "save_model": {"value": "sanitycheckimpl"},

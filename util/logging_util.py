@@ -7,9 +7,9 @@ import wandb
 
 def _get_path(filename):
     CKPT_PATH = os.environ.get("CKPT_PATH")
-    p = f"{CKPT_PATH}/{filename}.ckpt"
-    if os.path.isdir(CKPT_PATH): return p
-    else: raise NotADirectoryError
+    if not CKPT_PATH or not os.path.isdir(CKPT_PATH):
+        raise NotADirectoryError(f"CKPT_PATH must point to an existing directory (got {CKPT_PATH!r})")
+    return os.path.join(CKPT_PATH, f"{filename}.ckpt")
 
 def save_ckpt(ckpt_dict, privacy_engine, model, filename,):
     privacy_engine.save_checkpoint(module=model,checkpoint_dict=ckpt_dict, path = _get_path(filename))
@@ -86,6 +86,8 @@ def track_time(time_dict=None,start_time=None):
 
 
 def _name(aug):
+    if aug is None:
+        return "precomputed"
     if not hasattr(aug,"__self__"):
         return "unaugmented"
     else:

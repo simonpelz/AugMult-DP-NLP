@@ -4,75 +4,129 @@ import torch
 from torch.utils.data import DataLoader
 from datasets import load_dataset
 
-from util.local_datasets import  LocalHoCDataset, LocalTSVDataset, PrecomputedAugsDataset
+from util.local_datasets import LocalHoCDataset, LocalTSVDataset, PrecomputedAugsDataset
+from util.reproducibility import seed_worker
 
-def get_dataset(dataset_name,glue=True,precomputed_augs=False):
+LOCAL_DATASETS = ("mednli", "hoc")
+MODEL_INPUT_COLUMNS = ['input_ids', 'attention_mask', 'token_type_ids', 'labels']
+
+
+def get_dataset(dataset_name, glue=True, precomputed_augs=False, precomputed_views=None,
+                hf_path=None, hf_config=None, text_columns=None, label_column="label", splits=None):
+    """Returns a dict with 'train', 'validation' and (if available) 'test' splits.
+
+    Three sources:
+      * glue=True:          HF `glue/<dataset_name>` (test labels are hidden, i.e. -1).
+      * hf_path is set:     any HF hub dataset. `text_columns` (1 or 2 column names) and
+                            `label_column` are renamed to sentence / sentence1,sentence2 and label;
+                            `splits` maps {"train","validation","test"} -> hub split names.
+      * otherwise:          local TSVs in $DATASET_DIR (mednli, hoc).
+    """
     if glue:
-        dataset = load_dataset("glue", dataset_name)
+        return dict(load_dataset("glue", dataset_name))
+    if hf_path is not None:
+        return get_hf_dataset(hf_path, hf_config, text_columns, label_column, splits)
+
+    data_dir = os.environ.get("DATASET_DIR")
+    if data_dir is None: raise ValueError("DATASET_DIR environment variable is not set.")
+    train_file = os.path.join(data_dir, 'train.tsv')
+    val_file = os.path.join(data_dir, 'dev.tsv')
+    test_file = os.path.join(data_dir, 'test.tsv')
+
+    if dataset_name == "mednli":
+        if precomputed_augs:
+            train = PrecomputedAugsDataset(os.path.join(data_dir, 'train_precomputed_16.tsv'), views=precomputed_views)
+        else:
+            train = LocalTSVDataset(train_file)
+        dataset = {
+            'train':        train,
+            'validation':   LocalTSVDataset(val_file),
+            'test':         LocalTSVDataset(test_file),
+        }
+    elif dataset_name == "hoc":
+        if precomputed_augs: raise NotImplementedError("precomputed augmentations only exist for mednli")
+        dataset = {
+            'train':        LocalHoCDataset(train_file),
+            'validation':   LocalHoCDataset(val_file),
+            'test':         LocalHoCDataset(test_file),
+        }
     else:
-        data_dir = os.environ.get("DATASET_DIR")
-        if data_dir is None: raise ValueError("DATASET_DIR environment variable is not set.")
-        train_file = os.path.join(data_dir, 'train.tsv')
-        val_file = os.path.join(data_dir, 'dev.tsv')
-        test_file = os.path.join(data_dir, 'test.tsv')
-        if dataset_name == "mednli":
-            if precomputed_augs:
-                train_file = os.path.join(data_dir, 'train_precomputed_16.tsv')
-
-                dataset = {
-                    'train':        PrecomputedAugsDataset(train_file),
-                    'validation':   LocalTSVDataset(val_file),
-                    'test':         LocalTSVDataset(test_file)
-                }
-
-            else:
-                dataset = {
-                    'train':  LocalTSVDataset(train_file),
-                    'validation':  LocalTSVDataset(val_file),
-                    'test':  LocalTSVDataset(test_file)
-                }
-        if dataset_name == "hoc":
-            dataset = {
-                    'train':        LocalHoCDataset(train_file),
-                    'validation':   LocalHoCDataset(val_file),
-                    'test':         LocalHoCDataset(test_file)
-                }
-        else: raise NotImplementedError
+        raise NotImplementedError(f"Unknown local dataset {dataset_name!r} (known: {LOCAL_DATASETS}). "
+                                  "Use --glue for GLUE tasks or --hf_path for other HF hub datasets.")
     return dataset
+
+
+def get_hf_dataset(hf_path, hf_config=None, text_columns=None, label_column="label", splits=None):
+    if not text_columns or len(text_columns) not in (1, 2):
+        raise ValueError("text_columns must name 1 (single sentence) or 2 (sentence pair) columns")
+    splits = {"train": "train", "validation": "validation", "test": "test", **(splits or {})}
+    raw = load_dataset(hf_path, hf_config)
+    targets = ["sentence"] if len(text_columns) == 1 else ["sentence1", "sentence2"]
+    dataset = {}
+    for ours, theirs in splits.items():
+        if theirs is None or theirs not in raw:
+            if ours != "test":
+                raise ValueError(f"split {theirs!r} (for {ours}) not in {hf_path}: {list(raw)}")
+            continue
+        ds = raw[theirs]
+        keep = list(text_columns) + [label_column]
+        ds = ds.remove_columns([c for c in ds.column_names if c not in keep])
+        for src, dst in zip(list(text_columns) + [label_column], targets + ["label"]):
+            if src != dst:
+                ds = ds.rename_column(src, dst)
+        # drop unlabelled examples (e.g. SNLI uses -1 for no gold label; hidden test sets become empty)
+        ds = ds.filter(lambda ex: not (isinstance(ex["label"], int) and ex["label"] < 0))
+        dataset[ours] = ds
+    return dataset
+
+
+def has_labels(split):
+    """False for splits with hidden labels (GLUE test sets use -1)."""
+    if split is None or len(split) == 0:
+        return False
+    label = split[0]["label"]
+    return not (isinstance(label, int) and label < 0)
+
 
 def tokenize_from_dataset(sample,tokenizer):
     # Probably very inefficient computation bc in .map, but is done once with small datasets
     if any(c in sample for c in ["premise","question","sentence2","question2"]):
-        sentence_columns = list(sample.keys())
-        sentence_columns = [c for c in sentence_columns if c != 'label'] # .remove didnt work??
+        sentence_columns = [c for c in sample.keys() if c not in ('label', 'idx')]
         tokens = tokenizer(sample[sentence_columns[0]],sample[sentence_columns[1]], max_length=128, padding='max_length', truncation=True)
     elif "sentence" in sample:
-        if (len(sample.keys())-1!=1): raise NotImplementedError # might get false alarms for non glue but better safe than sorry
+        if (len([c for c in sample.keys() if c != 'idx'])-1!=1): raise NotImplementedError # might get false alarms for non glue but better safe than sorry
         tokens = tokenizer(sample['sentence'], max_length=128, padding='max_length', truncation=True)
     else:
         raise NotImplementedError
     return tokens
 
 
-def non_dp_tokenize_dataloader(dataset,tokenizer,batch_size):
+def non_dp_tokenize_dataloader(dataset,tokenizer,batch_size, shuffle=False, generator=None):
     if 'idx' in dataset.column_names: dataset = dataset.remove_columns(['idx'])
     tokens = dataset.map(lambda x: tokenize_from_dataset(x,tokenizer), batched=True)
     tokens = tokens.rename_column("label", "labels")
-    for col in ["sentence1","sentence2","label","sentence"]: 
-        if col in tokens.column_names: tokens.remove_columns([col])
-    tokens.set_format(type='torch', columns=['input_ids', 'attention_mask','token_type_ids', 'labels'])
-    dataloader = DataLoader(tokens, shuffle=False, batch_size=batch_size)
+    # drop raw text columns (needed for the local list-of-dict datasets; HF would just hide them)
+    tokens = tokens.remove_columns([c for c in tokens.column_names if c not in MODEL_INPUT_COLUMNS])
+    tokens.set_format(type='torch', columns=[c for c in MODEL_INPUT_COLUMNS if c in tokens.column_names])
+    dataloader = DataLoader(tokens, shuffle=shuffle, batch_size=batch_size, generator=generator)
     return dataloader
 
 
-def unpack_dict_list(list_of_dicts):  
-    # unpack a list of dicts with same keys into a single dict with a list of each of the values  
+def unpack_dict_list(list_of_dicts):
+    # unpack a list of dicts with same keys into a single dict with a list of each of the values
     combined_dict = defaultdict(list)
     for d in list_of_dicts:
         for key, value in d.items():
             combined_dict[key].append(value)
     combined_dict = dict(combined_dict)
     return combined_dict
+
+
+def _labels_tensor(labels):
+    # multi-label datasets (HoC) carry multi-hot lists -> float targets for BCEWithLogits
+    if len(labels) > 0 and isinstance(labels[0], (list, tuple)):
+        return torch.tensor(labels, dtype=torch.float)
+    return torch.tensor(labels)
 
 
 def init_mv_collate(tokenizer, transform_list,max_length=128, precomputed=False):
@@ -82,15 +136,23 @@ def init_mv_collate(tokenizer, transform_list,max_length=128, precomputed=False)
         return lambda batch: collate_fn(batch,tokenizer, transform_list,max_length)
 
 
+def _stack_views(grouped_by_aug):
+    # convert to (token, mask etc.) shape to: [K, B, seq_len]
+    # result is dict with {"input_ids":[[B,seq_len] x K ...],"atmask":[[B,seq_len] x K ...], etc.}
+    # we want: {"input_ids":[B, K, seq_len],etc.} (test example: (11,2,128))
+    combined_aug_groups = unpack_dict_list(grouped_by_aug)
+    return {key: torch.stack(combined_aug_groups[key], dim=1) for key in grouped_by_aug[0].keys()}
+
+
 def collate_precomputed(batch,tokenizer, transform_list,max_length=128):
-    """ 
-    assumes that there is only labels, original sentences and augmented sentences as columns
-    and string of form X1 and X2 where X is augmentation description for sentence1 and sentence2 (BERT)
+    """
+    assumes that there is only labels and view columns of the form <view>1 and <view>2
+    (see util/local_datasets.PrecomputedAugsDataset; "sentence" is the original pair)
     """
 
     # transformlist will contain augs and then pad the rest with n_augs*n_precomputed
     # eg. for *one* precomputed backtranslate: [unaugmented,synonym,swap, None,None,None] (n=3 "None"s for every precomp.)
-    
+
     # eliminate Nones
     multiply_by_following_augs = [aug for aug in transform_list if aug]
     assert len(multiply_by_following_augs) > 0 # at least put [unaugmented,...None]
@@ -102,9 +164,10 @@ def collate_precomputed(batch,tokenizer, transform_list,max_length=128):
     }
     labels = combined_batch.pop("label") # may raise error but this is only for training!
 
-    # get precomputed aug names
-    precomp_augs = set([s[:-1] for s in combined_batch.keys()]) # of form sentence1 sentence2 zh1 zh2 etc
-    assert len(transform_list) == (len(multiply_by_following_augs)*len(precomp_augs)) # K is defined by length of transformlist butis unused in this case. Pad list match K for fix
+    # precomputed view names in dataset column order (deterministic; previously a `set`)
+    precomp_augs = list(dict.fromkeys(s[:-1] for s in combined_batch.keys()))
+    assert len(transform_list) == (len(multiply_by_following_augs)*len(precomp_augs)), \
+        f"K={len(transform_list)} but data has {len(precomp_augs)} views x {len(multiply_by_following_augs)} augs"
     # load precomputed
     base_aug_sentence_pairs=[]
     for aug in precomp_augs:
@@ -123,43 +186,25 @@ def collate_precomputed(batch,tokenizer, transform_list,max_length=128):
             #tokenize
             tokenized_pairs = tokenizer(aug_s1,aug_s2,**tokenize_args) # is a dict from tokenizer
             # group all aug combinations separately
-            grouped_by_aug.append(tokenized_pairs) 
-    
-    # convert to (token, mask etc.) shape to: [K, B, seq_len]
-    # result is dict with {"input_ids":[[B,seq_len] x K ...],"atmask":[[B,seq_len] x K ...], etc.}
-    # we want: {"input_ids":[B, K, seq_len],etc.} (test example: (11,2,128))
-    combined_aug_groups = unpack_dict_list(grouped_by_aug)
-    
-    stacked_views = defaultdict(list)
-    # for each column from the tokenizer like "input_ids"
-    for key in grouped_by_aug[0].keys():
-        # group per sample (all augmented versions of that sample)
-        for per_sample_aug in zip(*combined_aug_groups[key]):
-            per_sample_aug = list(per_sample_aug)
-            # and stack them into a new dict
-            stacked_views[key].append(torch.stack(per_sample_aug))
-    stacked_views = dict(stacked_views)
-    stacked_views = {k: torch.stack(v) for k, v in stacked_views.items()}
+            grouped_by_aug.append(tokenized_pairs)
 
-    stacked_views['labels'] = torch.tensor(labels)
-
+    stacked_views = _stack_views(grouped_by_aug)
+    stacked_views['labels'] = _labels_tensor(labels)
     return stacked_views
-                        
+
 
 def collate_fn(batch,tokenizer, transform_list,max_length=128):
-    
+
     combined_batch = unpack_dict_list(batch)
 
     tokenize_args = {'padding': 'max_length','truncation': True,
         'max_length': max_length,'return_tensors': 'pt'
     }
 
-    # TODO awful implementation relies on exact column names, but works for glue
+    # relies on column names: everything except label/idx is treated as a text column
     labels = combined_batch.pop("label") # may raise error but this is only for training!
     _ = combined_batch.pop("idx", None) # some are called index or id
 
-    # TODO kinda hacky because column names are not the same
-    # fails for additional columns that are not sentences
     grouped_by_aug = [[] for _ in range(len(transform_list))]
     for i, transform in enumerate(transform_list):
 
@@ -176,37 +221,18 @@ def collate_fn(batch,tokenizer, transform_list,max_length=128):
         else: raise NotImplementedError
         grouped_by_aug[i] = tokenized_pairs # is a dict from tokenizer
 
-    # convert to (token, mask etc.) shape to: [K, B, seq_len]
-    # result is dict with {"input_ids":[[B,seq_len] x K ...],"atmask":[[B,seq_len] x K ...], etc.}
-    # we want: {"input_ids":[B, K, seq_len],etc.} (test example: (11,2,128))
-    combined_aug_groups = unpack_dict_list(grouped_by_aug)
-
-    stacked_views = defaultdict(list)
-    # for each column from the tokenizer like "input_ids"
-    for key in grouped_by_aug[0].keys():
-        # group per sample (all augmented versions of that sample)
-        for per_sample_aug in zip(*combined_aug_groups[key]):
-            per_sample_aug = list(per_sample_aug)
-            # and stack them into a new dict
-            stacked_views[key].append(torch.stack(per_sample_aug))
-
-    stacked_views = dict(stacked_views)
-    stacked_views = {k: torch.stack(v) for k, v in stacked_views.items()}
-
-    stacked_views['labels'] = torch.tensor(labels)
-
+    stacked_views = _stack_views(grouped_by_aug)
+    stacked_views['labels'] = _labels_tensor(labels)
     return stacked_views
 
 
 
-def dp_dataloader(trainset, subset, tokenizer, transform_list, batch_size):
+def dp_dataloader(trainset, subset, tokenizer, transform_list, batch_size, generator=None):
     if subset is not None:
         modified_trainset = trainset.select(range(subset))
     else:
         modified_trainset = trainset
 
-    #batches_per_epoch = -(len(modified_trainset)// -batch_size) # ceiling div
-        
     mv_train_loader = DataLoader(
         modified_trainset,
         batch_size=batch_size,
@@ -214,66 +240,11 @@ def dp_dataloader(trainset, subset, tokenizer, transform_list, batch_size):
         pin_memory=True,
         num_workers=1,
         prefetch_factor=1,
+        worker_init_fn=seed_worker,
+        # Opacus' DPDataLoader reuses this generator for Poisson sampling
+        generator=generator,
 
         # collate will later be overwritten for empty batch handling!
         collate_fn=lambda batch: collate_fn(batch, tokenizer, transform_list)
     )
     return mv_train_loader
-
-"""
-# Old code, too slow
-
-def dp_dataloader(trainset,subset,tokenizer,transform_list,batch_size):
-    if subset is not None:
-        modified_trainset = trainset.select(range(subset))
-    else:
-        modified_trainset = trainset
-    mv_train_set = MultiViewTextDataset(modified_trainset, tokenizer, transform_list=transform_list)
-    mv_train_loader = DataLoader(mv_train_set,batch_size,shuffle=False,pin_memory=True,num_workers=0)
-    return mv_train_loader
-
-
-class MultiViewTextDataset(torch.utils.data.Dataset):
-
-    def __init__(self, pre_dataset, tokenizer, transform_list=None, max_length=128):
-        self.pre_dataset = pre_dataset
-        self.tokenizer = tokenizer
-        self.transform_list = transform_list if transform_list else [lambda x: x]
-        self.max_length = max_length
-        self.key_to_text = 'sentence'
-        self.key_to_labels = 'label'
-
-    def __len__(self):
-        return len(self.pre_dataset)
-    
-    def __tokenize(self, text):
-        tokenized_text = self.tokenizer(
-                text,
-                padding='max_length',
-                truncation=True,
-                max_length=self.max_length,
-                return_tensors='pt'
-            )
-        return tokenized_text
-    
-    def __augment_tokenize_stack(self, text):
-        views = []
-        for transform in self.transform_list:
-            augmented_text = transform(text)
-            tokenized_text = self.__tokenize(augmented_text)
-            views.append(tokenized_text)
-        
-        # Stack views into a single tensor of shape [K, max_seq_len]
-        stacked_views = {key: torch.stack([view[key].squeeze(0) for view in views]) for key in views[0].keys()}
-        return stacked_views
-
-    def __getitem__(self, index):
-        text = self.pre_dataset[index][self.key_to_text]
-        label = self.pre_dataset[index][self.key_to_labels]
-        
-        stacked_views = self.__augment_tokenize_stack(text)
-        stacked_views['labels'] = label
-
-        return stacked_views
-    
-"""

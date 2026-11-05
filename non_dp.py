@@ -1,13 +1,16 @@
 import os
 import time
 
+import numpy as np
 import torch
 import torch.optim as optim
 
-from augmult.data import non_dp_tokenize_dataloader, get_dataset
+from augmult.data import non_dp_tokenize_dataloader, get_dataset, has_labels
+from train import compute_task_metric, eval, default_metric_name
 from util.early_stopper import EarlyStopping
 from util.different_finetune_modes import get_param_setter_from_str, model_and_tokenizer
-from util.logging_util import _get_path
+from util.logging_util import _get_path, track_time
+from util.reproducibility import set_seed
 
 import wandb
 
@@ -15,11 +18,15 @@ import warnings
 warnings.filterwarnings("ignore", category=FutureWarning, module='torch')
 
 
-def run(dataset_name, epochs, batch_size, lr, trainable_param_setter, num_labels,K=1,max_grad_norm=None,transform_list=None, noise_multiplier=None, dataset_size=None, save_model=None, target_epsilon=None, early_stop_patience=10, model_name = "bert-base-uncased", glue=True, max_phys_batchsize=1500,total_steps=None):    
+def run(dataset_name, epochs, batch_size, lr, trainable_param_setter, num_labels,K=1,max_grad_norm=None,transform_list=None, noise_multiplier=None, dataset_size=None, save_model=None, target_epsilon=None, early_stop_patience=10, model_name = "bert-base-uncased", glue=True, max_phys_batchsize=1500,total_steps=None,
+        seed=None, eval_test=True, multi_label=False, metric=None,
+        hf_path=None, hf_config=None, text_columns=None, label_column="label", splits=None):
 
     # ---------------- Initialisation ------------------
+    generator = set_seed(seed)
+
     # Model, Tokenizer
-    model, tokenizer = model_and_tokenizer(model_name, num_labels)
+    model, tokenizer = model_and_tokenizer(model_name, num_labels, multi_label=multi_label)
     total_p, trainable_p = trainable_param_setter(model)
     finetune_percent = trainable_p / total_p * 100
 
@@ -27,15 +34,16 @@ def run(dataset_name, epochs, batch_size, lr, trainable_param_setter, num_labels
     optimizer = optim.SGD(model.parameters(), lr=lr)
 
     # Dataloaders
-    precomputed = False
-    dataset = get_dataset(dataset_name, glue = glue, precomputed_augs=precomputed)
+    dataset = get_dataset(dataset_name, glue = glue, precomputed_augs=False, hf_path=hf_path, hf_config=hf_config,
+                          text_columns=text_columns, label_column=label_column, splits=splits)
     modified_trainset = dataset['train'].select(range(dataset_size)) if dataset_size is not None else dataset['train']
-    train_loader = non_dp_tokenize_dataloader(modified_trainset, tokenizer, batch_size,)
+    # NOTE: the thesis baseline used shuffle=False (fixed order every epoch); kept for comparability
+    train_loader = non_dp_tokenize_dataloader(modified_trainset, tokenizer, batch_size, generator=generator)
     valid_loader = non_dp_tokenize_dataloader(dataset['validation'], tokenizer, max_phys_batchsize)
 
     steps_per_epoch = len(train_loader)
     if epochs is None:
-        if total_steps is None: raise ValueError
+        if total_steps is None: raise ValueError("Specify either epochs or total_steps")
         epochs = -(total_steps// -steps_per_epoch)
         early_stop_patience = max(10,(epochs//4))
 
@@ -44,45 +52,39 @@ def run(dataset_name, epochs, batch_size, lr, trainable_param_setter, num_labels
     sampling_rate = batch_size / n_samples
 
     wandb.config.update({"early_stop_patience":early_stop_patience,"epochs":epochs,'K': K,'batches per epoch': steps_per_epoch,
-        "transform_list": "non-DP","finetune_percent":finetune_percent,"sampling_rate":sampling_rate,}, allow_val_change=True)
-    
-    # ------------- Remnants of copy Make DP with AugMult -----------------
+        "transform_list": "non-DP","finetune_percent":finetune_percent,"sampling_rate":sampling_rate,
+        "seed": seed, "metric": metric or default_metric_name(dataset_name, multi_label)}, allow_val_change=True)
 
-    delta = 1 / n_samples
     early_stop = EarlyStopping(patience=early_stop_patience)
-
-    resume_ckpt = None #os.environ.get("CKPT_ID",None)
-    ckpt_dict = {}
-
 
     # -------------- Training ----------------------
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.to(device=device)
 
-    start_epoch=ckpt_dict.get("epoch",0) # because logging starts counting at 1 not 0, this is correct
-    steps = steps_per_epoch*start_epoch
+    steps = 0
     train_inputs = {
         'model': model,
         'task_name':dataset_name,
         'train_loader': train_loader,
         'optimizer': optimizer,
         'device': device,
-        'K': K,
-        'max_phys_batch_size': max_phys_batchsize,
-        'steps': steps, # possibly overwrite some logged steps when requeueing (real batchsize unknown)
+        'steps': steps,
+        'multi_label': multi_label,
+        'metric': metric,
     }
+    eval_kwargs = {'device': device, 'task_name': dataset_name, 'multi_label': multi_label, 'metric': metric}
 
     valid_metric = 0
-    for i in range(start_epoch,epochs):
+    for i in range(epochs):
         # Train for 1 epoch
         train_inputs['steps'] = normal_train(**train_inputs)
         # Evaluate
-        valid_metric, valid_loss = eval(model, valid_loader,task_name=dataset_name, device=device)
+        valid_metric, valid_loss = eval(model, valid_loader, **eval_kwargs)
         wandb.log({"epoch": i+1,"valid_metric": valid_metric,"valid_loss": valid_loss})
         # early stopping
-        if early_stop.step(valid_loss): 
-            wandb.config.update({"Stopped early": True})
+        if early_stop.step(valid_loss):
+            wandb.config.update({"Stopped early": True}, allow_val_change=True)
             break
         # save ckpt
         if save_model:
@@ -94,8 +96,15 @@ def run(dataset_name, epochs, batch_size, lr, trainable_param_setter, num_labels
 
     # ------------ Evaluation ---------------------
 
-    real_eps = float('inf')
-    wandb.log({"epsilon": real_eps, "delta":delta})
+    wandb.log({"epsilon": float('inf')})
+
+    test_split = dataset.get('test')
+    if eval_test and test_split is not None and has_labels(test_split):
+        test_loader = non_dp_tokenize_dataloader(test_split, tokenizer, max_phys_batchsize)
+        test_metric, test_loss = eval(model, test_loader, **eval_kwargs)
+        wandb.log({"test_metric": test_metric, "test_loss": test_loss})
+    elif eval_test:
+        wandb.config.update({"test_skipped": "no labelled test split"}, allow_val_change=True)
 
     if valid_metric: return valid_metric # returning for sweep setup
 
@@ -103,12 +112,12 @@ def run(dataset_name, epochs, batch_size, lr, trainable_param_setter, num_labels
 def debug(params):
 
     wandb.init(project=("non-dp-"+params['dataset_name']), name="non-dp")
-    wandb.config.update(params)   
+    wandb.config.update(params)
 
     setter = "classifier_and_pooler" if params['model_name']== "bert-base-uncased" else "classifier_only"
     trainable_param_setter = get_param_setter_from_str(setter)
 
-    params.update({"trainable_param_setter":trainable_param_setter})
+    params = {**params, "trainable_param_setter": trainable_param_setter}
 
     run(**params)
     wandb.finish()
@@ -117,119 +126,84 @@ def debug(params):
 #--------------------------------------    Non-DP train     ------------------------------------------------------------
 #-----------------------------------------------------------------------------------------------------------------------
 
-import torch
-import numpy as np
-from train import compute_task_metric
-
-import wandb
-from util.logging_util import track_time
-
 
 def normal_train(
     model,
     train_loader,
     optimizer,
     device,
-    K,
-    max_phys_batch_size,
     steps,
     task_name,
+    multi_label=False,
+    metric=None,
 ):
-    
+
 
     logging_interval = 10
     to_mean_metrics = []
     to_mean_losses = []
     model.train()
-    
+
     # Time Logging
-    data_loading_times, forward_times, backward_times, optimizer_times = {"this_batch":[],"log":[]},{"this_batch":[],"log":[]},{"this_batch":[],"log":[]},{"this_batch":[],"log":[]},
+    timers = {name: {"this_batch": [], "log": []} for name in ("data_loading", "forward", "backward", "optimizer")}
 
     step = steps
     start_time = track_time()
     for batch in train_loader:
-    
-        start_time = track_time(data_loading_times,start_time)
+
+        start_time = track_time(timers["data_loading"],start_time)
 
         # Forward pass
         batch = {k: v.to(device) for k, v in batch.items()}
-        optimizer.zero_grad(set_to_none=True) 
+        if multi_label: batch['labels'] = batch['labels'].float()
+        optimizer.zero_grad(set_to_none=True)
 
         outputs = model(**batch)
 
-        loss = outputs.loss 
+        loss = outputs.loss
 
-        metric = compute_task_metric(outputs,batch,task_name)
+        batch_metric = compute_task_metric(outputs,batch,task_name,multi_label=multi_label,metric=metric)
 
-        start_time = track_time(forward_times,start_time)
-        
+        start_time = track_time(timers["forward"],start_time)
+
         # Backward pass
         loss.backward()
-        start_time = track_time(backward_times,start_time)
+        start_time = track_time(timers["backward"],start_time)
 
         # Optimization
         optimizer.step()
-        start_time = track_time(optimizer_times,start_time)
-
+        start_time = track_time(timers["optimizer"],start_time)
 
         # Logging loss and acc
-        is_updated = True
-        if is_updated: 
-            step += 1  
+        step += 1
 
-            for times in (data_loading_times,forward_times,backward_times,optimizer_times):
-                times["log"].append(sum(times["this_batch"]))
-                times["this_batch"] = []
+        for times in timers.values():
+            times["log"].append(sum(times["this_batch"]))
+            times["this_batch"] = []
 
-            to_mean_metrics.append(metric)
-            to_mean_losses.append(loss.item())
-            if step % logging_interval == logging_interval-1:
-                l, m = np.mean(to_mean_losses), np.mean(to_mean_metrics)
-                stats = {
-                    "train_loss": l,
-                    "train_metric": m,
-                    "optimizer_time": np.mean(optimizer_times["log"]),
-                    "forward_time": np.mean(forward_times["log"]),
-                    "backward_time": np.mean(backward_times["log"]),
-                    "data_loading_time": np.mean(data_loading_times["log"]),
-                }
-                wandb.log(stats, step=step)
-                
-                # Reset the timers and accumulators
-                for times in (data_loading_times,forward_times,backward_times,optimizer_times): times = {"this_batch":[],"log":[]}
-                to_mean_metrics, to_mean_losses = [], []
-      
+        to_mean_metrics.append(batch_metric)
+        to_mean_losses.append(loss.item())
+        if step % logging_interval == logging_interval-1:
+            l, m = np.mean(to_mean_losses), np.mean(to_mean_metrics)
+            stats = {
+                "train_loss": l,
+                "train_metric": m,
+                "optimizer_time": np.mean(timers["optimizer"]["log"]),
+                "forward_time": np.mean(timers["forward"]["log"]),
+                "backward_time": np.mean(timers["backward"]["log"]),
+                "data_loading_time": np.mean(timers["data_loading"]["log"]),
+            }
+            wandb.log(stats, step=step)
+
+            # Reset the timers and accumulators (in place)
+            for times in timers.values():
+                times["this_batch"].clear()
+                times["log"].clear()
+            to_mean_metrics, to_mean_losses = [], []
+
     return step
 
 
-
-def eval(model, eval_loader,device,task_name):
-    """
-    Test the model on the testing set and the training set
-    """
-    model.eval()
-    losses = []
-    test_metric = []
-
-    with torch.no_grad():
-        for batch in eval_loader:
-
-            batch = {k: v.to(device) for k, v in batch.items()}
-            outputs = model(**batch)
-
-            loss = outputs.loss 
-            metric = compute_task_metric(outputs,batch,task_name)
-
-            losses.append(loss.item())
-            test_metric.append(metric)
-
-    test_metric_avg = np.mean(test_metric)
-    losses_avg  = np.mean(losses)
-
-    model.train()
-
-    return (test_metric_avg,losses_avg)
-                
 def sweep(b_sizes,lrs,params):
     for batch in b_sizes:
         for lr in lrs:
@@ -244,46 +218,46 @@ def sweep(b_sizes,lrs,params):
                 pass
 
 if __name__ == "__main__":
-    os.environ['CKPT_PATH'] = "/home/spelz/AugMult_DP_NLP/logs_and_ckpts/ckpts"
-    os.environ['DATASET_DIR'] = "datasets/processed"
-    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
+    # Requires CKPT_PATH (when save_model is set) and DATASET_DIR (for local datasets) in the environment.
+    os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 
     sst2 = {
         'dataset_name': "sst2",
-        'glue': True,  
-        'num_labels': 2,  
+        'glue': True,
+        'num_labels': 2,
         }
     mednli = {
         'dataset_name': "mednli",
-        'glue': False,  
-        'num_labels': 3,  
+        'glue': False,
+        'num_labels': 3,
         }
     common = {
         **sst2,
         'max_phys_batchsize': 4096, # 5500 still not out of memory!
-        'model_name': "bert-base-uncased",  
+        'model_name': "bert-base-uncased",
+        'seed': 0,
     }
     minimal = {
         **common,
-        'epochs': 3,  
-        'dataset_size': 3000,  
-        'early_stop_patience': 100,  
+        'epochs': 3,
+        'dataset_size': 3000,
+        'early_stop_patience': 100,
 
-        'lr': 0.001,  
-        'batch_size': 100,  
+        'lr': 0.001,
+        'batch_size': 100,
         }
 
     params = {
         **common,
-        #'epochs': 50,  
-        'epochs': None,  
+        #'epochs': 50,
+        'epochs': None,
         'total_steps': 2000,
-        'dataset_size': None,  
-        #'early_stop_patience': 10,  
-        'save_model': "non-dp",  
+        'dataset_size': None,
+        #'early_stop_patience': 10,
+        'save_model': "non-dp",
 
-        #'lr': 0.001,  
-        #'batch_size': 16,  
+        #'lr': 0.001,
+        #'batch_size': 16,
         }
 
     # sweep sst2
@@ -296,21 +270,20 @@ if __name__ == "__main__":
     common = {
         **mednli,
         'max_phys_batchsize': 2048, # 5500 still not out of memory! (bert base)
-        'model_name': "roberta-large",  
-        'save_model': None,  
+        'model_name': "roberta-large",
+        'save_model': None,
+        'seed': 0,
     }
     params = {
         **common,
-        #'epochs': 50,  
-        'epochs': None,  
+        #'epochs': 50,
+        'epochs': None,
         'total_steps': 100000,
-        'dataset_size': None,  
-        #'early_stop_patience': 10,  
-        'save_model': "non-dp-roberta",  
+        'dataset_size': None,
+        #'early_stop_patience': 10,
+        'save_model': "non-dp-roberta",
 
-        'lr': 0.001,  
-        'batch_size': 2,  
+        'lr': 0.001,
+        'batch_size': 2,
         }
-    sweep([4],[0.001,0.00001],params)    
-
-
+    sweep([4],[0.001,0.00001],params)

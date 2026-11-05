@@ -5,12 +5,13 @@ from argparse import ArgumentParser
 
 from init_sweep import main
 
+REQUIRED_DIRS = ("WANDB_DIR", "MODEL_DIR", "DATASET_DIR", "JOBS_DIR")
+
+
 def check_dirs():
-    dirs = [os.getenv("WANDB_DIR"),os.getenv("MODEL_DIR"),os.getenv("CKPT_PATH"), os.getenv("DATASET_DIR")]
-    for p in dirs:
-        if not os.path.isdir(p):
-            return False
-    return True
+    missing = [v for v in REQUIRED_DIRS if not os.getenv(v) or not os.path.isdir(os.getenv(v))]
+    if missing:
+        raise EnvironmentError(f"Set these environment variables to existing directories: {missing}")
 
 def signal_handler(signum, frame):
     wandb.mark_preempting()
@@ -26,18 +27,17 @@ if __name__ == "__main__":
 
     # Path handling
     job_id = os.environ.get("SLURM_JOB_ID")
-    if job_id is None: raise EnvironmentError()
+    if job_id is None: raise EnvironmentError("execute_sweep.py is meant to run inside a SLURM job (SLURM_JOB_ID unset)")
 
-    os.environ["WANDB_DIR"] = "/u/home/pelz/Documents/"
-    os.environ["MODEL_DIR"] = "/u/home/pelz/Downloads/"
-    os.environ["DATASET_DIR"] = "/tmp/processed"
-    ckpt_path = f"/u/home/pelz/Documents/jobs/{job_id}/ckpts"
+    # Paths come from the environment (previously hard-coded to the thesis cluster):
+    # WANDB_DIR, MODEL_DIR, DATASET_DIR, and JOBS_DIR (per-job checkpoints go to $JOBS_DIR/<job_id>/ckpts)
+    check_dirs()
+    ckpt_path = os.path.join(os.environ["JOBS_DIR"], str(job_id), "ckpts")
     os.makedirs(ckpt_path, exist_ok = True)
     os.environ["CKPT_PATH"] = ckpt_path
-    if not check_dirs(): raise EnvironmentError
 
     # Physical env
-    os.environ["MAX_PHYS_BATCHSIZE"] = "4096" 
+    os.environ.setdefault("MAX_PHYS_BATCHSIZE", "4096")
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
 
     # Requeue behaviour

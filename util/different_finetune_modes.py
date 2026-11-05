@@ -1,4 +1,3 @@
-import warnings
 from transformers import AutoTokenizer, AutoConfig, AutoModelForSequenceClassification
 
 def classifier_only(model):
@@ -61,13 +60,13 @@ def set_from_layer_list(layer_list, model):
     return total_params, trainable_params
 
 
-def model_and_tokenizer(model_name, num_labels):
+def model_and_tokenizer(model_name, num_labels, multi_label=False):
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     config = AutoConfig.from_pretrained(model_name)
     config.num_labels = num_labels
-    if num_labels == 5: 
-        warnings.warn("Assuming Multilabel Classification! based on num_labels=5")
-        config.problem_type = "multi_label_classification"  # Specify multilabel classification
+    if multi_label:
+        # sigmoid + BCEWithLogits over num_labels independent labels (e.g. HoC, 10 labels)
+        config.problem_type = "multi_label_classification"
 
     model = AutoModelForSequenceClassification.from_pretrained(model_name, config=config)
     model.train()
