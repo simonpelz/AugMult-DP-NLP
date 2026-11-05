@@ -1,0 +1,8 @@
+# Minimal deps for the dpaug/ prototype (tested: Python 3.12, CPU).
+# CPU torch: pip install --index-url https://download.pytorch.org/whl/cpu torch
+torch>=2.6          # tested 2.15.0+cpu
+opacus>=1.6         # accountants only (tested 1.6.0)
+transformers>=5.0   # tested 5.22.1
+peft>=0.13          # tested 0.21.2
+datasets>=3.0       # examples only
+pytest>=8           # tests
